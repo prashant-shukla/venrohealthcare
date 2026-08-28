@@ -1,0 +1,19 @@
+# Database backups / dumps (never commit — may contain secrets & PII)
+files/backups/
+*.sql
+*.sql.gz
+db-backup-*.txt
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+
+# Local task artifacts
+Bedside Nursing Module Enhancements.pdf
+nursing-enhancements.pdf
