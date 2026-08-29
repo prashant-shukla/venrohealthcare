@@ -10,6 +10,11 @@ db-backup-*.txt
 *.pem
 *.key
 
+# Uploaded user content — ignore the files, keep the folder structure
+uploads/**
+!uploads/**/
+!uploads/**/.gitkeep
+
 # OS / editor cruft
 .DS_Store
 Thumbs.db
