@@ -96,6 +96,9 @@ patient.name as patient_name
         $this->db->join('nurse', 'nurse.id = nurse_assignments.nurse_id');
         $this->db->join('patient', 'patient.id = nurse_assignments.patient_id');
 
+        // Exclude soft-deleted (removed) assignments from the active list
+        $this->db->where('nurse_assignments.is_active', 1);
+
         if (!empty($nurse)) {
             $this->db->where('nurse.name', $nurse);
         }
@@ -114,5 +117,54 @@ patient.name as patient_name
         $query = $this->db->get();
 
         return $query->result();
+    }
+
+
+    /* ================= EFFECTIVE-DATED BILLING ================= */
+
+    function getAssignmentDetail($assignment_id)
+    {
+        $this->db->select('nurse_assignments.*, nurse.name as nurse_name, patient.name as patient_name');
+        $this->db->from('nurse_assignments');
+        $this->db->join('nurse', 'nurse.id = nurse_assignments.nurse_id', 'left');
+        $this->db->join('patient', 'patient.id = nurse_assignments.patient_id', 'left');
+        $this->db->where('nurse_assignments.id', $assignment_id);
+        return $this->db->get()->row();
+    }
+
+    function getBillingPeriods($assignment_id)
+    {
+        $this->db->where('assignment_id', $assignment_id);
+        $this->db->order_by('effective_from', 'ASC');
+        $this->db->order_by('id', 'ASC');
+        return $this->db->get('nurse_billing_periods')->result();
+    }
+
+    // The current (open / latest) billing period for an assignment
+    function getCurrentBillingPeriod($assignment_id)
+    {
+        $this->db->where('assignment_id', $assignment_id);
+        $this->db->order_by('effective_from', 'DESC');
+        $this->db->order_by('id', 'DESC');
+        $this->db->limit(1);
+        return $this->db->get('nurse_billing_periods')->row();
+    }
+
+    function insertBillingPeriod($data)
+    {
+        $this->db->insert('nurse_billing_periods', $data);
+        return $this->db->insert_id();
+    }
+
+    function closeBillingPeriod($period_id, $effective_to)
+    {
+        $this->db->where('id', $period_id);
+        $this->db->update('nurse_billing_periods', array('effective_to' => $effective_to));
+    }
+
+    function updateAssignmentEndDate($assignment_id, $end_date)
+    {
+        $this->db->where('id', $assignment_id);
+        $this->db->update('nurse_assignments', array('end_date' => $end_date));
     }
 }

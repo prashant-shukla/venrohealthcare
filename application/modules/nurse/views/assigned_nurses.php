@@ -122,9 +122,9 @@
                                         class="btn btn-info btn-xs">
                                         <i class="fa fa-edit"></i>
                                     </a>
-                                    <a href="<?php echo base_url('nurse/deleteAssignment/' . $row->id); ?>"
+                                    <a href="javascript:void(0);"
                                         class="btn btn-danger btn-xs"
-                                        onclick="return confirm('Delete this assignment?')">
+                                        onclick="removeAssignment2(<?php echo $row->id; ?>)">
                                         <i class="fa fa-trash"></i>
                                     </a>
                                 </td>
@@ -140,6 +140,19 @@
             </div>
 
         </section>
+
+<script>
+    function removeAssignment2(id) {
+        if (!confirm('Remove this assignment? The historical record will be preserved.')) {
+            return;
+        }
+        var reason = prompt('Reason for removal (recorded in the audit trail):', '');
+        if (reason === null) {
+            return;
+        }
+        window.location.href = '<?php echo base_url('nurse/deleteAssignment/'); ?>' + id + '?reason=' + encodeURIComponent(reason);
+    }
+</script>
 
     </section>
 </section>

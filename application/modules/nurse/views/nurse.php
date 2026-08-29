@@ -18,6 +18,13 @@
 
                             </a>
 
+                            <a href="<?php echo base_url('feedback'); ?>"
+                                class="btn btn-warning btn-xs" style="margin-right: 10px;">
+
+                                <i class="fa fa-comments"></i> Feedback
+
+                            </a>
+
                             <a data-toggle="modal" href="#myModal"
                                 class="btn btn-success btn-xs">
 
@@ -41,6 +48,7 @@
                                 <th><?php echo lang('address'); ?></th>
                                 <th><?php echo lang('phone'); ?></th>
                                  <th>License Expiry</th>
+                                <th class="no-print">Certificates</th>
                                 <th class="no-print"><?php echo lang('options'); ?></th>
                             </tr>
                         </thead>
@@ -59,7 +67,11 @@
                             <?php foreach ($nurses as $nurse) { ?>
                                 <tr class="">
                                     <td style="width:10%;"><img style="width:95%;" src="<?php echo $nurse->img_url; ?>"></td>
-                                    <td> <?php echo $nurse->name; ?></td>
+                                    <td> <?php echo $nurse->name; ?>
+                                        <?php if (isset($nurse->is_active) && $nurse->is_active == 0) { ?>
+                                            <span class="label label-danger">Deactivated</span>
+                                        <?php } ?>
+                                    </td>
                                     <td><?php echo $nurse->email; ?></td>
                                     <td class="center"><?php echo $nurse->address; ?></td>
                                     <td><?php echo $nurse->phone; ?></td>
@@ -74,36 +86,38 @@
 
             $expiry_date = $nurse->license_expiry_date;
 
-            $one_month_later = date(
+            // "Expiring Soon" window: certificate/licence expires within the next 3 months
+            $three_months_later = date(
                 'Y-m-d',
-                strtotime('+1 month')
+                strtotime('+3 months')
             );
 
-            // Expired
-            if ($expiry_date < $today) {
+            // Not set
+            if (empty($expiry_date) || $expiry_date == '0000-00-00') {
+
+                echo '<span style="color:#999;">Not set</span>';
+
+            }
+
+            // Expired (kept clearly identified separately, in red)
+            elseif ($expiry_date < $today) {
 
                 echo '<span style="color:red; font-weight:bold;">';
-
                 echo date('d M Y', strtotime($expiry_date));
-
                 echo ' (Licence Expired)';
-
                 echo '</span>';
 
             }
 
-            // Expiring Soon
+            // Expiring Soon (within next 3 months, orange)
             elseif (
                 $expiry_date >= $today &&
-                $expiry_date <= $one_month_later
+                $expiry_date <= $three_months_later
             ) {
 
                 echo '<span style="color:orange; font-weight:bold;">';
-
                 echo date('d M Y', strtotime($expiry_date));
-
                 echo ' (Expiring Soon)';
-
                 echo '</span>';
 
             }
@@ -112,27 +126,61 @@
             else {
 
                 echo '<span style="color:green; font-weight:bold;">';
-
                 echo date('d M Y', strtotime($expiry_date));
-
                 echo '</span>';
             }
 
             ?>
 
         </td>
-                                    <td class="no-print">
-                                        <a href="<?php echo base_url('nurse/assign/' . $nurse->id); ?>"
-                                            class="btn btn-success btn-xs">
-                                            <i class="fa fa-user"></i> Assign
-                                        </a>
-                                        <button type="button" class="btn btn-info btn-xs btn_width editbutton" title="<?php echo lang('edit'); ?>" data-toggle="modal" data-id="<?php echo $nurse->id; ?>"><i class="fa fa-edit"> </i></button>
-                                        <a class="btn btn-info btn-xs btn_width delete_button" title="<?php echo lang('delete'); ?>" href="nurse/delete?id=<?php echo $nurse->id; ?>" onclick="return confirm('Are you sure you want to delete this item?');"><i class="fa fa-trash"></i> </a>
 
-                                        <a href="<?php echo base_url('nurse/payment/' . $nurse->id); ?>"
-                                            class="btn btn-warning btn-xs">
-                                            <i class="fa fa-money"></i> Payment
+        <!-- CERTIFICATES / LICENCE — viewable directly from the nurse record -->
+        <td class="no-print">
+            <?php if (!empty($nurse->nurse_license_pdf)) { ?>
+                <a href="<?php echo base_url($nurse->nurse_license_pdf); ?>" target="_blank"
+                    class="btn btn-primary btn-xs" style="margin-bottom:3px;">
+                    <i class="fa fa-certificate"></i> Licence
+                </a>
+            <?php } ?>
+            <?php if (!empty($nurse->nurse_profile_pdf)) { ?>
+                <a href="<?php echo base_url($nurse->nurse_profile_pdf); ?>" target="_blank"
+                    class="btn btn-default btn-xs" style="margin-bottom:3px;">
+                    <i class="fa fa-file-pdf-o"></i> Profile
+                </a>
+            <?php } ?>
+            <?php if (empty($nurse->nurse_license_pdf) && empty($nurse->nurse_profile_pdf)) { ?>
+                <span style="color:#999;">—</span>
+            <?php } ?>
+        </td>
+
+                                    <td class="no-print">
+                                        <a href="<?php echo base_url('nurse/record/' . $nurse->id); ?>"
+                                            class="btn btn-default btn-xs" title="Full historical record">
+                                            <i class="fa fa-folder-open"></i> Record
                                         </a>
+
+                                        <?php if (isset($nurse->is_active) && $nurse->is_active == 0) { ?>
+                                            <!-- Deactivated nurse: history preserved, allow restore -->
+                                            <a class="btn btn-success btn-xs"
+                                                href="<?php echo base_url('nurse/restore?id=' . $nurse->id); ?>"
+                                                onclick="return confirm('Restore (reactivate) this nurse?');">
+                                                <i class="fa fa-undo"></i> Restore
+                                            </a>
+                                        <?php } else { ?>
+                                            <a href="<?php echo base_url('nurse/assign/' . $nurse->id); ?>"
+                                                class="btn btn-success btn-xs">
+                                                <i class="fa fa-user"></i> Assign
+                                            </a>
+                                            <button type="button" class="btn btn-info btn-xs btn_width editbutton" title="<?php echo lang('edit'); ?>" data-toggle="modal" data-id="<?php echo $nurse->id; ?>"><i class="fa fa-edit"> </i></button>
+                                            <a class="btn btn-danger btn-xs btn_width" title="Deactivate"
+                                                href="javascript:void(0);"
+                                                onclick="deactivateNurse(<?php echo $nurse->id; ?>);"><i class="fa fa-trash"></i> </a>
+
+                                            <a href="<?php echo base_url('nurse/payment/' . $nurse->id); ?>"
+                                                class="btn btn-warning btn-xs">
+                                                <i class="fa fa-money"></i> Payment
+                                            </a>
+                                        <?php } ?>
                                     </td>
 
                                 </tr>
@@ -327,6 +375,20 @@
 </div>
 <!-- Edit Event Modal-->
 
+<script>
+    // Deactivate (soft delete) a nurse: confirm + capture a reason,
+    // then submit to the controller which preserves the historical record.
+    function deactivateNurse(id) {
+        if (!confirm('Deactivate this nurse? Their historical records will be preserved.')) {
+            return;
+        }
+        var reason = prompt('Reason for deactivation (recorded in the audit trail):', '');
+        if (reason === null) {
+            return; // cancelled
+        }
+        window.location.href = 'nurse/delete?id=' + id + '&reason=' + encodeURIComponent(reason);
+    }
+</script>
 <script src="common/js/codearistos.min.js"></script>
 <script type="text/javascript">
     $(document).ready(function() {

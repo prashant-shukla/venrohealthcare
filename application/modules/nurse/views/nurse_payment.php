@@ -116,22 +116,11 @@
 
                             <?php foreach ($records as $row) {
 
-                                $start = strtotime($row->start_date);
-                                $end = strtotime($row->end_date);
+                                // Days (inclusive) for display
+                                $days = isset($row->calc_days) ? $row->calc_days : 0;
 
-                                $days = ($end - $start) / (60 * 60 * 24) + 1;
-
-                                // Billing Calculate
-                                if ($row->billing_type == 'Day') {
-
-                                    $total = $days * $row->billing_amount;
-                                } elseif ($row->billing_type == 'Week') {
-
-                                    $total = ceil($days / 7) * $row->billing_amount;
-                                } else {
-
-                                    $total = ceil($days / 30) * $row->billing_amount;
-                                }
+                                // Pro-rated, period-aware total computed in the controller
+                                $total = isset($row->calc_total) ? $row->calc_total : 0;
 
                                 // Transport Charge Add
                                 $total += !empty($row->transport_charge)
@@ -159,7 +148,7 @@
 
                                     <td>
                                         <b>
-                                            ₹<?php echo number_format($total, 2); ?>
+                                            <?php echo $this->currency; ?> <?php echo number_format($total, 2); ?>
                                         </b>
                                     </td>
 
@@ -214,10 +203,10 @@
                                     <td><?php echo $pay->payment_date; ?></td>
 
                                     <td>
-                                        ₹<?php echo number_format($pay->amount, 2); ?>
+                                        <?php echo $this->currency; ?> <?php echo number_format($pay->amount, 2); ?>
                                     </td>
 
-                                    <td><?php echo $pay->note; ?></td>
+                                    <td><?php echo html_escape($pay->note); ?></td>
 
                                 </tr>
 
@@ -254,7 +243,7 @@
 
                             <h4>
                                 Total Billing:
-                                ₹<?php echo number_format($grand_total, 2); ?>
+                                <?php echo $this->currency; ?> <?php echo number_format($grand_total, 2); ?>
                             </h4>
 
                         </div>
@@ -267,7 +256,7 @@
 
                             <h4>
                                 Total Paid:
-                                ₹<?php echo number_format($paid_total, 2); ?>
+                                <?php echo $this->currency; ?> <?php echo number_format($paid_total, 2); ?>
                             </h4>
 
                         </div>
@@ -280,7 +269,7 @@
 
                             <h4>
                                 Remaining:
-                                ₹<?php echo number_format($remaining, 2); ?>
+                                <?php echo $this->currency; ?> <?php echo number_format($remaining, 2); ?>
                             </h4>
 
                         </div>

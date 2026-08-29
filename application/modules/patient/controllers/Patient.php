@@ -333,9 +333,52 @@ class Patient extends MX_Controller
         $data = array();
         $id = $this->input->get('id');
         $data['patient'] = $this->patient_model->getPatientById($id);
+
+        // Assigned Care Team - currently assigned bedside nurse(s)
+        $today = date('Y-m-d');
+        $this->db->select('nurse_assignments.*, nurse.name as nurse_name, nurse.status as nurse_status');
+        $this->db->from('nurse_assignments');
+        $this->db->join('nurse', 'nurse.id = nurse_assignments.nurse_id', 'left');
+        $this->db->where('nurse_assignments.patient_id', $id);
+        $this->db->where('nurse_assignments.is_active', 1);
+        $this->db->group_start();
+        $this->db->where('nurse_assignments.end_date >=', $today);
+        $this->db->or_where('nurse_assignments.end_date IS NULL', null, false);
+        $this->db->group_end();
+        $this->db->order_by("FIELD(nurse_assignments.assignment_role,'Primary','Additional')", '', false);
+        $data['care_nurses'] = $this->db->get()->result();
+
+        // Patient Recovery Journal entries (most recent first)
+        $this->db->where('patient_id', $id);
+        $this->db->order_by('entry_datetime', 'DESC');
+        $this->db->order_by('id', 'DESC');
+        $data['recovery_journal'] = $this->db->get('patient_recovery_journal')->result();
+
         $this->load->view('home/dashboard'); // just the header file
         $this->load->view('details', $data);
         $this->load->view('home/footer'); // just the footer file
+    }
+
+    // Add a Patient Recovery Journal entry (authorised assigned nurses / doctors)
+    public function addRecoveryJournal()
+    {
+        $patient_id = $this->input->post('patient_id');
+
+        $u = $this->ion_auth->user()->row();
+
+        $entry = array(
+            'patient_id'      => $patient_id,
+            'entry_datetime'  => $this->input->post('entry_datetime') ?: date('Y-m-d H:i:s'),
+            'notes'           => $this->input->post('notes', true),
+            'role'            => $this->input->post('role', true),
+            'entered_by'      => $u ? $u->id : null,
+            'entered_by_name' => $u ? $u->username : null,
+        );
+
+        $this->db->insert('patient_recovery_journal', $entry);
+
+        $this->session->set_flashdata('feedback', 'Recovery journal entry added.');
+        redirect('patient/patientDetails?id=' . $patient_id);
     }
 
     function report()

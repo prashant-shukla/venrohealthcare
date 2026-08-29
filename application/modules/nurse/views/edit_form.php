@@ -161,9 +161,7 @@ style="<?php if(isset($nurse->status) && $nurse->status!='Discontinued') echo 'd
 
 <label for="discontinued_reason"><?php echo ('discontinued reason'); ?></label>
 
-<textarea id="discontinued_reason" name="discontinued_reason" class="form-control">
-<?php echo isset($nurse->discontinued_reason) ? $nurse->discontinued_reason : ''; ?>
-</textarea>
+<textarea id="discontinued_reason" name="discontinued_reason" class="form-control"><?php echo isset($nurse->discontinued_reason) ? html_escape($nurse->discontinued_reason) : ''; ?></textarea>
 
 </div>
 

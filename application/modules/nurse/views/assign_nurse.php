@@ -147,6 +147,16 @@
 
                             <div class="col-md-6">
                                 <div class="form-group">
+                                    <label for="assignment_role">Assignment Role</label>
+                                    <select name="assignment_role" id="assignment_role" class="form-control">
+                                        <option value="Primary">Primary (Day) Nurse</option>
+                                        <option value="Additional">Additional / Alternate Nurse</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="col-md-6">
+                                <div class="form-group">
                                     <!-- <label for="payment_term">Payment Terms</label> -->
                                     <label for="payment_term">billing type </label>
 
@@ -203,33 +213,40 @@
                     </div>
                     <hr>
 
-                    <h4>Transport Charges (Optional)</h4>
+                    <h4>Transport / Commute Charges (Optional)</h4>
 
                     <div class="row">
 
-                        <div class="col-md-12">
+                        <!-- Transport / Commute Frequency -->
+                        <div class="col-md-6">
                             <div class="form-group">
-                                <label for="transport_charge">Transport Charge</label>
-                                <input type="number" name="transport_charge" id="transport_charge" class="form-control">
+                                <label for="transport_frequency">Commute Frequency</label>
+                                <select name="transport_frequency" id="transport_frequency" class="form-control">
+                                    <option value="">-- Select --</option>
+                                    <option value="Daily">Daily</option>
+                                    <option value="Weekly">Weekly</option>
+                                    <option value="Monthly">Monthly</option>
+                                    <option value="Flexible">Flexible Commute</option>
+                                </select>
                             </div>
                         </div>
 
-                         <hr
-                            <!-- Start Date -->
                         <div class="col-md-6">
                             <div class="form-group">
-                                <label for="start_date">Start Date (Transport)</label>
-                                <input type="date" name="Transport_start_date" id="Transport_start_date" class="form-control">
+                                <label for="transport_charge">
+                                    Transport Charge
+                                    <small id="transport_charge_hint" class="text-muted"></small>
+                                </label>
+                                <input type="number" step="0.01" name="transport_charge" id="transport_charge" class="form-control">
                             </div>
-
-
                         </div>
 
-                        <!-- End Date -->
-                        <div class="col-md-6">
+                        <!-- Flexible arrangement note (only for Flexible Commute) -->
+                        <div class="col-md-12" id="transportNoteBox" style="display:none;">
                             <div class="form-group">
-                                <label for="end_date">End Date (Transport)</label>
-                                <input type="date" name="Transport_end_date" id="Transport_end_date" class="form-control">
+                                <label for="transport_note">Agreed Arrangement (Flexible Commute)</label>
+                                <textarea name="transport_note" id="transport_note" class="form-control" rows="2"
+                                    placeholder="Describe the agreed transport/commute arrangement"></textarea>
                             </div>
                         </div>
 
@@ -301,10 +318,15 @@
                             </td>
                             <td>
 
-                                <a href="<?php echo base_url('nurse/deleteAssignments/' . $row->id); ?>"
+                                <a href="<?php echo base_url('nurse/billing/' . $row->id); ?>"
+                                    class="btn btn-sm btn-primary">
+                                    Billing
+                                </a>
+
+                                <a href="javascript:void(0);"
                                     class="btn btn-sm btn-danger"
-                                    onclick="return confirm('Are you sure you want to delete this record?')">
-                                    Delete
+                                    onclick="removeAssignment(<?php echo $row->id; ?>)">
+                                    Remove
                                 </a>
                             </td>
 
@@ -329,6 +351,20 @@
 </section>
 
 
+
+<script>
+    // Soft-remove an assignment: confirm + capture reason (audit trail)
+    function removeAssignment(id) {
+        if (!confirm('Remove this assignment? The historical record will be preserved.')) {
+            return;
+        }
+        var reason = prompt('Reason for removal (recorded in the audit trail):', '');
+        if (reason === null) {
+            return;
+        }
+        window.location.href = '<?php echo base_url('nurse/deleteAssignments/'); ?>' + id + '?reason=' + encodeURIComponent(reason);
+    }
+</script>
 
 <script>
     const startDate = document.getElementById('start_date');
@@ -386,4 +422,36 @@
         });
 
     });
+</script>
+
+<script>
+    // Transport / Commute frequency behaviour
+    function toggleTransportFields() {
+
+        var freq = document.getElementById("transport_frequency").value;
+        var noteBox = document.getElementById("transportNoteBox");
+        var hint = document.getElementById("transport_charge_hint");
+
+        if (freq === "Flexible") {
+            // Flexible Commute: amount is entered per the agreed arrangement
+            noteBox.style.display = "block";
+            hint.textContent = "(agreed amount)";
+        } else {
+            noteBox.style.display = "none";
+            if (freq === "Daily") {
+                hint.textContent = "(per day)";
+            } else if (freq === "Weekly") {
+                hint.textContent = "(per week)";
+            } else if (freq === "Monthly") {
+                hint.textContent = "(per month)";
+            } else {
+                hint.textContent = "";
+            }
+        }
+    }
+
+    document.getElementById("transport_frequency")
+        .addEventListener("change", toggleTransportFields);
+
+    toggleTransportFields();
 </script>

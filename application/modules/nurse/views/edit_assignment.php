@@ -53,6 +53,14 @@
 
 
                     <div class="form-group col-md-6">
+                        <label>Assignment Role</label>
+                        <select name="assignment_role" class="form-control">
+                            <option value="Primary"    <?php if ($assignment->assignment_role == 'Primary')    echo 'selected'; ?>>Primary (Day) Nurse</option>
+                            <option value="Additional" <?php if ($assignment->assignment_role == 'Additional') echo 'selected'; ?>>Additional / Alternate Nurse</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group col-md-6">
                         <label>Payment Term</label>
 
                         <select name="payment_term" id="edit_payment_term" class="form-control">
@@ -93,14 +101,32 @@
 
 
 
-                    <div class="form-group col-md-12">
+                    <div class="form-group col-md-6">
+                        <label>Commute Frequency</label>
+                        <select name="transport_frequency" id="edit_transport_frequency" class="form-control">
+                            <option value="">-- Select --</option>
+                            <option value="Daily"    <?php if ($assignment->transport_frequency == 'Daily')    echo 'selected'; ?>>Daily</option>
+                            <option value="Weekly"   <?php if ($assignment->transport_frequency == 'Weekly')   echo 'selected'; ?>>Weekly</option>
+                            <option value="Monthly"  <?php if ($assignment->transport_frequency == 'Monthly')  echo 'selected'; ?>>Monthly</option>
+                            <option value="Flexible" <?php if ($assignment->transport_frequency == 'Flexible') echo 'selected'; ?>>Flexible Commute</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group col-md-6">
                         <label>Transport Charge</label>
 
-                        <input type="number"
+                        <input type="number" step="0.01"
                             name="transport_charge"
                             value="<?php echo $assignment->transport_charge; ?>"
                             class="form-control">
 
+                    </div>
+
+                    <div class="form-group col-md-12" id="editTransportNoteBox"
+                        style="<?php if ($assignment->transport_frequency != 'Flexible') echo 'display:none;'; ?>">
+                        <label>Agreed Arrangement (Flexible Commute)</label>
+                        <textarea name="transport_note" class="form-control" rows="2"
+                            placeholder="Describe the agreed transport/commute arrangement"><?php echo isset($assignment->transport_note) ? html_escape($assignment->transport_note) : ''; ?></textarea>
                     </div>
 
                     <button type="submit" class="btn btn-success">
@@ -141,4 +167,14 @@
 
     // page load
     toggleEditPaymentFields();
+
+    // Transport / Commute frequency: show note only for Flexible
+    function toggleEditTransportNote() {
+        var freq = document.getElementById("edit_transport_frequency").value;
+        document.getElementById("editTransportNoteBox").style.display =
+            (freq === "Flexible") ? "block" : "none";
+    }
+    document.getElementById("edit_transport_frequency")
+        .addEventListener("change", toggleEditTransportNote);
+    toggleEditTransportNote();
 </script>
