@@ -117,7 +117,8 @@ $days = !empty($nurse->available_days) ? explode(',', $nurse->available_days) : 
 
     <div class="form-group">
         <label for="nurse_profile_pdf"><?php echo ('nurse profile pdf'); ?></label>
-        <input type="file" id="nurse_profile_pdf" name="nurse_profile_pdf" class="form-control">
+        <input type="file" id="nurse_profile_pdf" name="nurse_profile_pdf" class="form-control pdf-only" accept="application/pdf">
+        <small class="text-muted">PDF only.</small>
 
         <?php if (!empty($nurse->nurse_profile_pdf)) { ?>
             <br>
@@ -127,7 +128,8 @@ $days = !empty($nurse->available_days) ? explode(',', $nurse->available_days) : 
 
     <div class="form-group">
         <label for="nurse_license_pdf"><?php echo ('nurse license pdf'); ?></label>
-        <input type="file" id="nurse_license_pdf" name="nurse_license_pdf" class="form-control">
+        <input type="file" id="nurse_license_pdf" name="nurse_license_pdf" class="form-control pdf-only" accept="application/pdf">
+        <small class="text-muted">PDF only.</small>
 
         <?php if (!empty($nurse->nurse_license_pdf)) { ?>
             <br>

@@ -127,17 +127,25 @@ class Nurse extends MX_Controller
             /* PROFILE PDF */
             /* ===================== */
 
-            $config['upload_path']   = FCPATH . 'uploads/nurses/profile/';
-            $config['allowed_types'] = 'pdf';
-            $config['max_size']      = 2048;
-            $config['encrypt_name']  = TRUE;
+            // Clean, dedicated config for PDF uploads (no leftover image-dimension keys).
+            $pdf_config = array(
+                'allowed_types' => 'pdf',
+                'max_size'      => 10240, // 10 MB - certificates can be large scans
+                'encrypt_name'  => TRUE,
+                'overwrite'     => FALSE,
+            );
 
-            $this->upload->initialize($config);
+            $upload_errors = array();
+
+            $pdf_config['upload_path'] = FCPATH . 'uploads/nurses/profile/';
+            $this->upload->initialize($pdf_config);
             $nurse_profile_pdf = NULL;
             if (!empty($_FILES['nurse_profile_pdf']['name'])) {
                 if ($this->upload->do_upload('nurse_profile_pdf')) {
                     $file = $this->upload->data();
                     $nurse_profile_pdf = 'uploads/nurses/profile/' . $file['file_name'];
+                } else {
+                    $upload_errors[] = 'Profile PDF: ' . strip_tags($this->upload->display_errors('', ''));
                 }
             }
 
@@ -148,8 +156,8 @@ class Nurse extends MX_Controller
             /* LICENSE PDF */
             /* ===================== */
 
-            $config['upload_path'] = FCPATH . 'uploads/nurses/license/';
-            $this->upload->initialize($config);
+            $pdf_config['upload_path'] = FCPATH . 'uploads/nurses/license/';
+            $this->upload->initialize($pdf_config);
 
             $nurse_license_pdf = NULL;
             if (!empty($_FILES['nurse_license_pdf']['name'])) {
@@ -158,8 +166,13 @@ class Nurse extends MX_Controller
 
                     $file = $this->upload->data();
                     $nurse_license_pdf = 'uploads/nurses/license/' . $file['file_name'];
+                } else {
+                    $upload_errors[] = 'License PDF: ' . strip_tags($this->upload->display_errors('', ''));
                 }
             }
+
+            // (Upload errors are surfaced after the save, before redirect, so they
+            //  are not overwritten by the "added/updated" message below.)
 
             /* ===================== */
             /* MAIN DATA */
@@ -242,6 +255,14 @@ class Nurse extends MX_Controller
 
                 $this->session->set_flashdata('feedback', lang('updated'));
             }
+
+            // Surface any file-upload problems (e.g. non-PDF) so they are not
+            // silently dropped. This overrides the added/updated message because
+            // a failed certificate upload is more important to know about.
+            if (!empty($upload_errors)) {
+                $this->session->set_flashdata('feedback', 'Saved, but file NOT uploaded — ' . implode(' | ', $upload_errors));
+            }
+
             // Loading View
             redirect('nurse');
         }
@@ -355,10 +376,11 @@ class Nurse extends MX_Controller
             return;
         }
 
-        // Previous & current patient assignments
-        $this->db->select('nurse_assignments.*, patient.name as patient_name');
+        // Previous & current patient assignments (with the patient's associated doctor)
+        $this->db->select('nurse_assignments.*, patient.name as patient_name, doctor.name as doctor_name');
         $this->db->from('nurse_assignments');
         $this->db->join('patient', 'patient.id = nurse_assignments.patient_id', 'left');
+        $this->db->join('doctor', 'doctor.id = patient.doctor', 'left');
         $this->db->where('nurse_assignments.nurse_id', $nurse_id);
         $this->db->order_by('nurse_assignments.start_date', 'DESC');
         $data['assignments'] = $this->db->get()->result();
@@ -391,16 +413,22 @@ class Nurse extends MX_Controller
         // patients list
         $data['patients'] = $this->db->get('patient')->result();
 
-        // 🔥 nurse assignment history
+        // 🔥 nurse assignment history (with the patient's associated doctor)
         $this->db->select('
         nurse_assignments.*,
-        patient.name as patient_name
+        patient.name as patient_name,
+        patient.doctor as doctor_id,
+        doctor.name as doctor_name
     ');
 
         $this->db->from('nurse_assignments');
         $this->db->join('patient', 'patient.id = nurse_assignments.patient_id', 'left');
+        $this->db->join('doctor', 'doctor.id = patient.doctor', 'left');
 
         $this->db->where('nurse_assignments.nurse_id', $nurse_id);
+        // Only show active (not removed) assignments here; removed ones remain
+        // visible in the nurse's full historical record.
+        $this->db->where('nurse_assignments.is_active', 1);
         $this->db->order_by('nurse_assignments.id', 'DESC');
 
         $data['history'] = $this->db->get()->result();
@@ -537,12 +565,24 @@ class Nurse extends MX_Controller
             return;
         }
 
+        $assignment_role = $this->input->post('assignment_role');
+
+        // Enforce a single Active (Primary) nurse per patient at a time:
+        // if this new assignment is Primary, demote any existing active Primary
+        // for the same patient to Additional.
+        if ($assignment_role === 'Primary') {
+            $this->db->where('patient_id', $patient_id);
+            $this->db->where('is_active', 1);
+            $this->db->where('assignment_role', 'Primary');
+            $this->db->update('nurse_assignments', array('assignment_role' => 'Additional'));
+        }
+
         // Save Assignment
         $data = array(
 
             'nurse_id' => $nurse_id,
             'patient_id' => $patient_id,
-            'assignment_role' => $this->input->post('assignment_role'),
+            'assignment_role' => $assignment_role,
 
             'start_date' => $start_date,
             'end_date' => $end_date,

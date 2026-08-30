@@ -108,13 +108,13 @@
                                             <th>Nurse</th>
                                             <th>Role</th>
                                             <th>Period</th>
-                                            <th>Nurse Status</th>
+                                            <th>Active Status</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         <?php foreach ($care_nurses as $cn) { ?>
                                             <tr>
-                                                <td><?php echo $cn->nurse_name; ?></td>
+                                                <td><?php echo html_escape($cn->nurse_name); ?></td>
                                                 <td>
                                                     <?php if ($cn->assignment_role == 'Additional') { ?>
                                                         <span class="label label-info">Additional / Alternate</span>
@@ -127,7 +127,14 @@
                                                     &ndash;
                                                     <?php echo !empty($cn->end_date) ? date('d M Y', strtotime($cn->end_date)) : 'Ongoing'; ?>
                                                 </td>
-                                                <td><?php echo $cn->nurse_status; ?></td>
+                                                <td>
+                                                    <?php // Only the Primary nurse is Active at a time; others are on standby. ?>
+                                                    <?php if ($cn->assignment_role == 'Additional') { ?>
+                                                        <span class="label label-default">Standby</span>
+                                                    <?php } else { ?>
+                                                        <span class="label label-success">Active</span>
+                                                    <?php } ?>
+                                                </td>
                                             </tr>
                                         <?php } ?>
                                     </tbody>

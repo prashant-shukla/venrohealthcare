@@ -3,39 +3,96 @@
 <section id="main-content">
     <section class="wrapper site-min-height">
         <!-- page start-->
-        <section class="panel">
-            <header class="panel-heading">
-                <?php echo lang('nurse'); ?>
-                <div class="col-md-4 no-print pull-right">
-                    <a data-toggle="modal" href="#myModal">
-                        <div class="btn-group pull-right">
+        <?php
+        // ---- summary stats for the header tiles ----
+        $nl_total = is_array($nurses) ? count($nurses) : 0;
+        $nl_active = 0; $nl_onplace = 0; $nl_lic_alert = 0;
+        $nl_today = date('Y-m-d');
+        $nl_three = date('Y-m-d', strtotime('+3 months'));
+        foreach ($nurses as $__n) {
+            if (!isset($__n->is_active) || $__n->is_active == 1) $nl_active++;
+            if (isset($__n->status) && $__n->status == 'On Placement') $nl_onplace++;
+            $__e = $__n->license_expiry_date;
+            if (!empty($__e) && $__e != '0000-00-00' && $__e <= $nl_three) $nl_lic_alert++;
+        }
+        ?>
 
+        <style>
+        .nl-wrap { padding:4px 2px 30px; }
+        .nl-head { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:20px; }
+        .nl-title { font-size:22px; font-weight:700; color:#1e293b; display:flex; align-items:center; gap:10px; margin:0; }
+        .nl-title .ic { width:38px; height:38px; border-radius:10px; background:#e8f1fe; color:#2c7be5; display:flex; align-items:center; justify-content:center; font-size:18px; }
+        .nl-actions { display:flex; gap:9px; flex-wrap:wrap; }
+        .nl-btn { display:inline-flex; align-items:center; gap:7px; padding:9px 15px; border-radius:9px; font-size:13px; font-weight:600;
+            border:1px solid transparent; cursor:pointer; transition:.15s; text-decoration:none; }
+        .nl-btn:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(0,0,0,.12); text-decoration:none; }
+        .nl-btn.primary { background:#2c7be5; color:#fff; }
+        .nl-btn.ghost   { background:#fff; color:#475569; border-color:#e2e8f0; }
+        .nl-btn.amber   { background:#fff; color:#e8830c; border-color:#f6d9b8; }
 
-                            <a href="<?php echo base_url('nurse/assignments'); ?>"
-                                class="btn btn-info btn-xs" style="margin-right: 10px;">
+        .nl-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:22px; }
+        @media (max-width:900px){ .nl-stats { grid-template-columns:repeat(2,1fr); } }
+        .nl-stat { background:#fff; border:1px solid #eef1f5; border-radius:12px; padding:16px 18px;
+            box-shadow:0 1px 3px rgba(16,24,40,.06); display:flex; align-items:center; gap:14px; }
+        .nl-stat-ic { width:44px; height:44px; border-radius:11px; display:flex; align-items:center; justify-content:center; font-size:18px; flex:0 0 auto; }
+        .nl-stat-ic.blue { background:#e8f1fe; color:#2c7be5; } .nl-stat-ic.green { background:#e6f6ee; color:#1f9d55; }
+        .nl-stat-ic.violet { background:#eef0fe; color:#5b63d3; } .nl-stat-ic.amber { background:#fdf1e3; color:#e8830c; }
+        .nl-stat-v { font-size:22px; font-weight:700; color:#1e293b; line-height:1; }
+        .nl-stat-l { font-size:12px; color:#94a3b8; margin-top:3px; }
 
-                                <i class="fa fa-list"></i> Assigned Nurses
+        /* Card + DataTable restyle */
+        .nl-card { background:#fff; border:1px solid #eef1f5; border-radius:12px; box-shadow:0 1px 3px rgba(16,24,40,.06); padding:8px 16px 16px; }
+        #editable-sample { border:none !important; margin-top:6px; }
+        #editable-sample.table-bordered > thead > tr > th,
+        #editable-sample.table-bordered > tbody > tr > td { border:none; border-bottom:1px solid #f1f4f8; }
+        #editable-sample > thead > tr > th { text-transform:uppercase; font-size:11px; letter-spacing:.4px; color:#94a3b8;
+            font-weight:700; padding:12px 14px; border-bottom:2px solid #eef1f5 !important; background:transparent; }
+        #editable-sample > tbody > tr > td { padding:12px 14px; vertical-align:middle; font-size:13px; color:#334155; }
+        #editable-sample.table-striped > tbody > tr:nth-of-type(odd) { background:#fff; }
+        #editable-sample > tbody > tr:hover td { background:#fafbfe; }
 
-                            </a>
+        .nl-ava { width:40px; height:40px; border-radius:50%; object-fit:cover; border:2px solid #eef1f5; background:#f1f5fb; }
+        .nl-ava-txt { width:40px; height:40px; border-radius:50%; background:#e8f1fe; color:#2c7be5; font-weight:700; font-size:14px;
+            display:flex; align-items:center; justify-content:center; border:2px solid #dbe9fd; }
+        .nl-name { font-weight:600; color:#1e293b; }
+        .nl-muted { color:#64748b; }
 
-                            <a href="<?php echo base_url('feedback'); ?>"
-                                class="btn btn-warning btn-xs" style="margin-right: 10px;">
+        .nl-pill { font-size:11.5px; font-weight:700; padding:4px 11px; border-radius:20px; display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }
+        .nl-pill.ok   { background:#e6f6ee; color:#1f9d55; }
+        .nl-pill.soon { background:#fdf1e3; color:#d9770b; }
+        .nl-pill.exp  { background:#fde8e8; color:#e3342f; }
+        .nl-pill.none { background:#eef1f5; color:#94a3b8; }
 
-                                <i class="fa fa-comments"></i> Feedback
+        .nl-act .btn { border-radius:7px !important; margin:0 3px 4px 0; font-size:11.5px; padding:5px 9px; }
+        .nl-doc { display:inline-flex; align-items:center; gap:5px; font-size:11.5px; font-weight:600; padding:4px 9px; border-radius:7px;
+            border:1px solid #e6ebf2; color:#475569; margin:0 4px 4px 0; text-decoration:none; }
+        .nl-doc:hover { border-color:#2c7be5; color:#2c7be5; text-decoration:none; }
+        .nl-doc i { color:#2c7be5; }
+        </style>
 
-                            </a>
+        <div class="nl-wrap">
 
-                            <a data-toggle="modal" href="#myModal"
-                                class="btn btn-success btn-xs">
+        <div class="nl-head">
+            <h1 class="nl-title"><span class="ic"><i class="fa fa-user-md"></i></span> <?php echo lang('nurse'); ?></h1>
+            <div class="nl-actions no-print">
+                <a href="<?php echo base_url('nurse/assignments'); ?>" class="nl-btn ghost"><i class="fa fa-list"></i> Assigned Nurses</a>
+                <a href="<?php echo base_url('feedback'); ?>" class="nl-btn amber"><i class="fa fa-comments"></i> Feedback</a>
+                <a data-toggle="modal" href="#myModal" class="nl-btn primary"><i class="fa fa-plus-circle"></i> <?php echo lang('add_nurse'); ?></a>
+            </div>
+        </div>
 
-                                <i class="fa fa-plus-circle"></i> <?php echo lang('add_nurse'); ?>
+        <div class="nl-stats no-print">
+            <div class="nl-stat"><div class="nl-stat-ic blue"><i class="fa fa-users"></i></div>
+                <div><div class="nl-stat-v"><?php echo $nl_total; ?></div><div class="nl-stat-l">Total nurses</div></div></div>
+            <div class="nl-stat"><div class="nl-stat-ic green"><i class="fa fa-check-circle"></i></div>
+                <div><div class="nl-stat-v"><?php echo $nl_active; ?></div><div class="nl-stat-l">Active</div></div></div>
+            <div class="nl-stat"><div class="nl-stat-ic violet"><i class="fa fa-user-md"></i></div>
+                <div><div class="nl-stat-v"><?php echo $nl_onplace; ?></div><div class="nl-stat-l">On placement</div></div></div>
+            <div class="nl-stat"><div class="nl-stat-ic amber"><i class="fa fa-certificate"></i></div>
+                <div><div class="nl-stat-v"><?php echo $nl_lic_alert; ?></div><div class="nl-stat-l">Licence alerts</div></div></div>
+        </div>
 
-                            </a>
-
-                        </div>
-                    </a>
-                </div>
-            </header>
+        <section class="panel nl-card" style="box-shadow:none;border:none;">
             <div class="panel-body">
                 <div class="adv-table editable-table ">
                     <div class="space15"></div>
@@ -64,96 +121,74 @@
                                 }
                             </style>
 
-                            <?php foreach ($nurses as $nurse) { ?>
+                            <?php foreach ($nurses as $nurse) {
+                                // avatar initials fallback
+                                $nl_init = '';
+                                if (!empty($nurse->name)) {
+                                    foreach (preg_split('/\s+/', trim($nurse->name)) as $pp) {
+                                        if ($pp !== '' && strlen($nl_init) < 2) $nl_init .= strtoupper($pp[0]);
+                                    }
+                                }
+                            ?>
                                 <tr class="">
-                                    <td style="width:10%;"><img style="width:95%;" src="<?php echo $nurse->img_url; ?>"></td>
-                                    <td> <?php echo $nurse->name; ?>
-                                        <?php if (isset($nurse->is_active) && $nurse->is_active == 0) { ?>
-                                            <span class="label label-danger">Deactivated</span>
+                                    <td style="width:56px;">
+                                        <?php if (!empty($nurse->img_url)) { ?>
+                                            <img class="nl-ava" src="<?php echo $nurse->img_url; ?>" alt="">
+                                        <?php } else { ?>
+                                            <span class="nl-ava-txt"><?php echo html_escape($nl_init ?: 'N'); ?></span>
                                         <?php } ?>
                                     </td>
-                                    <td><?php echo $nurse->email; ?></td>
-                                    <td class="center"><?php echo $nurse->address; ?></td>
-                                    <td><?php echo $nurse->phone; ?></td>
+                                    <td>
+                                        <span class="nl-name"><?php echo html_escape($nurse->name); ?></span>
+                                        <?php if (isset($nurse->is_active) && $nurse->is_active == 0) { ?>
+                                            <span class="nl-pill exp" style="margin-left:4px;"><i class="fa fa-ban"></i> Deactivated</span>
+                                        <?php } ?>
+                                    </td>
+                                    <td class="nl-muted"><?php echo html_escape($nurse->email); ?></td>
+                                    <td class="nl-muted"><?php echo html_escape($nurse->address); ?></td>
+                                    <td class="nl-muted"><?php echo html_escape($nurse->phone); ?></td>
 
         <!-- LICENSE EXPIRY ALERT -->
 
         <td>
-
             <?php
-
             $today = date('Y-m-d');
-
             $expiry_date = $nurse->license_expiry_date;
+            $three_months_later = date('Y-m-d', strtotime('+3 months'));
 
-            // "Expiring Soon" window: certificate/licence expires within the next 3 months
-            $three_months_later = date(
-                'Y-m-d',
-                strtotime('+3 months')
-            );
-
-            // Not set
             if (empty($expiry_date) || $expiry_date == '0000-00-00') {
-
-                echo '<span style="color:#999;">Not set</span>';
-
+                echo '<span class="nl-pill none">Not set</span>';
+            } elseif ($expiry_date < $today) {
+                echo '<span class="nl-pill exp"><i class="fa fa-times-circle"></i> Expired</span>'
+                   . '<div class="nl-muted" style="font-size:11px;margin-top:4px;">' . date('d M Y', strtotime($expiry_date)) . '</div>';
+            } elseif ($expiry_date <= $three_months_later) {
+                echo '<span class="nl-pill soon"><i class="fa fa-exclamation-triangle"></i> Expiring soon</span>'
+                   . '<div class="nl-muted" style="font-size:11px;margin-top:4px;">' . date('d M Y', strtotime($expiry_date)) . '</div>';
+            } else {
+                echo '<span class="nl-pill ok"><i class="fa fa-check"></i> Valid</span>'
+                   . '<div class="nl-muted" style="font-size:11px;margin-top:4px;">' . date('d M Y', strtotime($expiry_date)) . '</div>';
             }
-
-            // Expired (kept clearly identified separately, in red)
-            elseif ($expiry_date < $today) {
-
-                echo '<span style="color:red; font-weight:bold;">';
-                echo date('d M Y', strtotime($expiry_date));
-                echo ' (Licence Expired)';
-                echo '</span>';
-
-            }
-
-            // Expiring Soon (within next 3 months, orange)
-            elseif (
-                $expiry_date >= $today &&
-                $expiry_date <= $three_months_later
-            ) {
-
-                echo '<span style="color:orange; font-weight:bold;">';
-                echo date('d M Y', strtotime($expiry_date));
-                echo ' (Expiring Soon)';
-                echo '</span>';
-
-            }
-
-            // Valid
-            else {
-
-                echo '<span style="color:green; font-weight:bold;">';
-                echo date('d M Y', strtotime($expiry_date));
-                echo '</span>';
-            }
-
             ?>
-
         </td>
 
         <!-- CERTIFICATES / LICENCE — viewable directly from the nurse record -->
         <td class="no-print">
             <?php if (!empty($nurse->nurse_license_pdf)) { ?>
-                <a href="<?php echo base_url($nurse->nurse_license_pdf); ?>" target="_blank"
-                    class="btn btn-primary btn-xs" style="margin-bottom:3px;">
+                <a href="<?php echo base_url($nurse->nurse_license_pdf); ?>" target="_blank" class="nl-doc">
                     <i class="fa fa-certificate"></i> Licence
                 </a>
             <?php } ?>
             <?php if (!empty($nurse->nurse_profile_pdf)) { ?>
-                <a href="<?php echo base_url($nurse->nurse_profile_pdf); ?>" target="_blank"
-                    class="btn btn-default btn-xs" style="margin-bottom:3px;">
+                <a href="<?php echo base_url($nurse->nurse_profile_pdf); ?>" target="_blank" class="nl-doc">
                     <i class="fa fa-file-pdf-o"></i> Profile
                 </a>
             <?php } ?>
             <?php if (empty($nurse->nurse_license_pdf) && empty($nurse->nurse_profile_pdf)) { ?>
-                <span style="color:#999;">—</span>
+                <span class="nl-muted">—</span>
             <?php } ?>
         </td>
 
-                                    <td class="no-print">
+                                    <td class="no-print nl-act">
                                         <a href="<?php echo base_url('nurse/record/' . $nurse->id); ?>"
                                             class="btn btn-default btn-xs" title="Full historical record">
                                             <i class="fa fa-folder-open"></i> Record
@@ -191,6 +226,7 @@
                 </div>
             </div>
         </section>
+        </div><!-- /nl-wrap -->
         <!-- page end-->
     </section>
 </section>
@@ -314,12 +350,14 @@
 
                     <div class="form-group">
                         <label>Nurse Profile (PDF)</label>
-                        <input type="file" name="nurse_profile_pdf" class="form-control">
+                        <input type="file" name="nurse_profile_pdf" class="form-control pdf-only" accept="application/pdf">
+                        <small class="text-muted">PDF only.</small>
                     </div>
 
                     <div class="form-group">
                         <label>Nurse License (PDF)</label>
-                        <input type="file" name="nurse_license_pdf" class="form-control">
+                        <input type="file" name="nurse_license_pdf" class="form-control pdf-only" accept="application/pdf">
+                        <small class="text-muted">PDF only.</small>
                     </div>
 
                     <div class="form-group">
@@ -374,6 +412,21 @@
     </div><!-- /.modal-dialog -->
 </div>
 <!-- Edit Event Modal-->
+
+<script>
+    // Instant client-side check: only allow PDF files for certificate/licence uploads.
+    // Delegated so it also works on the AJAX-loaded edit form.
+    $(document).on('change', 'input.pdf-only', function () {
+        var f = this.files && this.files[0];
+        if (!f) return;
+        var okType = (f.type === 'application/pdf');
+        var okExt = /\.pdf$/i.test(f.name);
+        if (!okType && !okExt) {
+            alert('Only PDF files are allowed for this field.\n"' + f.name + '" is not a PDF.');
+            this.value = ''; // clear the invalid selection
+        }
+    });
+</script>
 
 <script>
     // Deactivate (soft delete) a nurse: confirm + capture a reason,

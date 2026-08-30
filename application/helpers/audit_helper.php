@@ -20,6 +20,12 @@ if (!function_exists('audit_log')) {
     {
         $CI =& get_instance();
 
+        // Fail-safe: if the audit_trail table is missing, skip logging rather
+        // than breaking the operation that triggered it.
+        if (!$CI->db->table_exists('audit_trail')) {
+            return;
+        }
+
         // Stamp the acting user automatically.
         $performed_by = null;
         $performed_by_name = null;
