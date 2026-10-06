@@ -5,6 +5,9 @@ if (!defined('BASEPATH'))
 
 class Nurse extends MX_Controller
 {
+    // Assignment payment_term => billing frequency / fee column
+    private static $TERM_FREQUENCY = array('Day' => 'Daily', 'Week' => 'Weekly', 'Month' => 'Monthly');
+    private static $TERM_FEE_FIELD = array('Day' => 'per_day_fee', 'Week' => 'per_week_fee', 'Month' => 'per_month_fee');
 
     function __construct()
     {
@@ -49,7 +52,7 @@ class Nurse extends MX_Controller
         $phone = $this->input->post('phone');
         $age = $this->input->post('age');
         $availability = $this->input->post('availability');
-        $license_expiry_date = $this->input->post('license_expiry_date');
+        $license_expiry_date = $this->input->post('license_expiry_date') ?: null;
 
 
         $this->load->library('form_validation');
@@ -223,6 +226,7 @@ class Nurse extends MX_Controller
                     $nurse_user_id = $this->db->get_where('nurse', array('email' => $email))->row()->id;
                     $id_info = array('ion_user_id' => $ion_user_id);
                     $this->nurse_model->updateNurse($nurse_user_id, $id_info);
+                    $this->_record_certificates($nurse_user_id, $nurse_license_pdf, $nurse_profile_pdf, $license_expiry_date);
                     $this->session->set_flashdata('feedback', lang('added'));
                 }
             } else { // Updating Nurse
@@ -253,6 +257,24 @@ class Nurse extends MX_Controller
                     ));
                 }
 
+                if ($old_nurse && (string) $old_nurse->license_expiry_date !== (string) $license_expiry_date) {
+                    audit_log(array(
+                        'module'      => 'nurse',
+                        'record_type' => 'nurse',
+                        'record_id'   => $id,
+                        'action'      => 'Licence expiry date changed',
+                        'field'       => 'license_expiry_date',
+                        'old_value'   => $old_nurse->license_expiry_date,
+                        'new_value'   => $license_expiry_date,
+                    ));
+                    // Keep the expiry on the current licence in step when no new file was uploaded
+                    if (!$nurse_license_pdf) {
+                        $this->db->where(array('nurse_id' => $id, 'cert_type' => 'Licence', 'is_current' => 1));
+                        $this->db->update('nurse_certificates', array('expiry_date' => $license_expiry_date ?: null));
+                    }
+                }
+                $this->_record_certificates($id, $nurse_license_pdf, $nurse_profile_pdf, $license_expiry_date);
+
                 $this->session->set_flashdata('feedback', lang('updated'));
             }
 
@@ -265,6 +287,39 @@ class Nurse extends MX_Controller
 
             // Loading View
             redirect('nurse');
+        }
+    }
+
+    // Keep every uploaded licence / profile document; the newest of each type is the current one
+    private function _record_certificates($nurse_id, $license_pdf, $profile_pdf, $license_expiry)
+    {
+        $u = $this->_current_user();
+        $uploads = array(
+            'Licence' => array($license_pdf, $license_expiry ?: null),
+            'Profile' => array($profile_pdf, null),
+        );
+        foreach ($uploads as $type => $upload) {
+            if (empty($upload[0])) {
+                continue;
+            }
+            $this->db->where(array('nurse_id' => $nurse_id, 'cert_type' => $type));
+            $this->db->update('nurse_certificates', array('is_current' => 0));
+            $this->db->insert('nurse_certificates', array(
+                'nurse_id'         => $nurse_id,
+                'cert_type'        => $type,
+                'file_path'        => $upload[0],
+                'expiry_date'      => $upload[1],
+                'is_current'       => 1,
+                'uploaded_by'      => $u ? $u->id : null,
+                'uploaded_by_name' => $u ? $u->username : null,
+            ));
+            audit_log(array(
+                'module'      => 'nurse',
+                'record_type' => 'nurse',
+                'record_id'   => $nurse_id,
+                'action'      => $type == 'Licence' ? 'Licence uploaded' : 'Profile document uploaded',
+                'new_value'   => $upload[1] ? 'Expires ' . date('d M Y', strtotime($upload[1])) : null,
+            ));
         }
     }
 
@@ -303,10 +358,23 @@ class Nurse extends MX_Controller
     function delete()
     {
         $id = $this->input->get('id');
-        $reason = $this->input->get('reason');
+        $reason = trim((string) $this->input->get('reason', true));
 
         $user_data = $this->db->get_where('nurse', array('id' => $id))->row();
         if (empty($user_data)) {
+            redirect('nurse');
+            return;
+        }
+        if ($reason === '') {
+            $this->session->set_flashdata('feedback', 'A reason is required to deactivate a nurse.');
+            redirect('nurse');
+            return;
+        }
+
+        $this->db->where(array('nurse_id' => $id, 'is_active' => 1));
+        $this->db->where('end_date >=', date('Y-m-d'));
+        if ($this->db->count_all_results('nurse_assignments') > 0) {
+            $this->session->set_flashdata('feedback', 'This nurse still has current or upcoming placements. End or remove those assignments before deactivating the nurse.');
             redirect('nurse');
             return;
         }
@@ -386,12 +454,25 @@ class Nurse extends MX_Controller
         $data['assignments'] = $this->db->get()->result();
 
         // Professional fee / payment records
+        $data['payments'] = array_reverse($this->nurse_model->getPayments($nurse_id));
+
+        // Current and previous certificates / licences
         $this->db->where('nurse_id', $nurse_id);
-        $this->db->order_by('payment_date', 'DESC');
-        $data['payments'] = $this->db->get('nurse_payments')->result();
+        $this->db->order_by('uploaded_at', 'DESC');
+        $this->db->order_by('id', 'DESC');
+        $data['certificates'] = $this->db->get('nurse_certificates')->result();
 
         // Status history + other audit activity for this nurse
         $data['audit'] = audit_get('nurse', $nurse_id);
+
+        // Feedback received about this nurse
+        $this->db->select('feedback.*, patient.name as patient_name');
+        $this->db->from('feedback');
+        $this->db->join('patient', 'patient.id = feedback.patient_id', 'left');
+        $this->db->where('feedback.nurse_id', $nurse_id);
+        $this->db->where('feedback.status', 'Submitted');
+        $this->db->order_by('feedback.id', 'DESC');
+        $data['feedback'] = $this->db->get()->result();
 
         $this->load->view('home/dashboard');
         $this->load->view('nurse_record', $data);
@@ -409,9 +490,20 @@ class Nurse extends MX_Controller
 
         // nurse detail
         $data['nurse'] = $this->nurse_model->getNurseById($nurse_id);
+        if (empty($data['nurse'])) {
+            show_404();
+            return;
+        }
 
-        // patients list
-        $data['patients'] = $this->db->get('patient')->result();
+        // patients list (archived patients cannot be assigned)
+        $data['patients'] = $this->db->where('is_active', 1)->get('patient')->result();
+
+        // Patients that currently have an active nurse assignment (colour flag in the dropdown)
+        $this->db->distinct();
+        $this->db->select('patient_id');
+        $this->db->where('is_active', 1);
+        $this->db->where('end_date >=', date('Y-m-d'));
+        $data['assigned_patient_ids'] = array_column($this->db->get('nurse_assignments')->result_array(), 'patient_id');
 
         // 🔥 nurse assignment history (with the patient's associated doctor)
         $this->db->select('
@@ -432,6 +524,11 @@ class Nurse extends MX_Controller
         $this->db->order_by('nurse_assignments.id', 'DESC');
 
         $data['history'] = $this->db->get()->result();
+
+        // Current fee / transport arrangement of each assignment
+        foreach ($data['history'] as $row) {
+            $row->current = $this->nurse_model->getCurrentBillingPeriod($row->id);
+        }
 
         // views load
         $this->load->view('home/dashboard');
@@ -527,154 +624,161 @@ class Nurse extends MX_Controller
 
     public function saveAssign()
     {
-
         $nurse_id = $this->input->post('nurse_id');
         $patient_id = $this->input->post('patient_id');
         $start_date = $this->input->post('start_date');
         $end_date = $this->input->post('end_date');
+        $assignment_role = $this->input->post('assignment_role') === 'Additional' ? 'Additional' : 'Primary';
+        $back = $this->input->post('redirect_to') === 'patient' ? 'patient' : 'nurse/assign/' . $nurse_id;
 
-        // Basic validation
-        if (empty($nurse_id) || empty($patient_id) || empty($start_date) || empty($end_date)) {
-            $this->session->set_flashdata('error', 'Please select a patient and provide start and end dates.');
-            redirect('nurse/assign/' . $nurse_id);
-            return;
+        $payment_term = $this->input->post('payment_term');
+        if (!isset(self::$TERM_FREQUENCY[$payment_term])) {
+            $payment_term = 'Day';
         }
-        if ($end_date < $start_date) {
-            $this->session->set_flashdata('error', 'End date cannot be before start date.');
-            redirect('nurse/assign/' . $nurse_id);
+        $billing_amount = $this->input->post(self::$TERM_FEE_FIELD[$payment_term]);
+        $transport = $this->_transport_input();
+
+        $error = null;
+        if (empty($nurse_id) || empty($patient_id) || empty($start_date) || empty($end_date)) {
+            $error = 'Please select a nurse and a patient and provide start and end dates.';
+        } elseif ($end_date < $start_date) {
+            $error = 'End date cannot be before start date.';
+        } elseif (!is_numeric($billing_amount) || $billing_amount < 0) {
+            $error = 'Please enter a valid billing amount.';
+        } elseif (is_string($transport)) {
+            $error = $transport;
+        } elseif (!$this->db->where(array('id' => $nurse_id, 'is_active' => 1))->count_all_results('nurse')) {
+            $error = 'This nurse is deactivated and cannot be assigned.';
+        } elseif (!$this->db->where(array('id' => $patient_id, 'is_active' => 1))->count_all_results('patient')) {
+            $error = 'This patient is archived and cannot be assigned a nurse.';
+        }
+        if ($error) {
+            $this->session->set_flashdata('error', $error);
+            redirect($back);
             return;
         }
 
         // Check the nurse isn't already assigned for overlapping dates.
-        // Use parameter-bound conditions (no string interpolation) to avoid SQL injection.
         $this->db->where('nurse_id', $nurse_id);
         $this->db->where('is_active', 1);
         $this->db->where('start_date <=', $end_date);
         $this->db->where('end_date >=', $start_date);
-        $query = $this->db->get('nurse_assignments');
-
-        if ($query->num_rows() > 0) {
-
-            $this->session->set_flashdata(
-                'error',
-                'Nurse already assigned for selected dates'
-            );
-
-            // same page redirect
-            redirect('nurse/assign/' . $nurse_id);
+        if ($this->db->get('nurse_assignments')->num_rows() > 0) {
+            $this->session->set_flashdata('error', 'Nurse already assigned for selected dates');
+            redirect($back);
             return;
         }
 
-        $assignment_role = $this->input->post('assignment_role');
+        // Roles are never changed automatically; just warn about another Primary nurse.
+        $other_primary = $assignment_role === 'Primary'
+            ? $this->nurse_model->getOverlappingPrimary($patient_id, $start_date, $end_date)
+            : array();
 
-        // Enforce a single Active (Primary) nurse per patient at a time:
-        // if this new assignment is Primary, demote any existing active Primary
-        // for the same patient to Additional.
-        if ($assignment_role === 'Primary') {
-            $this->db->where('patient_id', $patient_id);
-            $this->db->where('is_active', 1);
-            $this->db->where('assignment_role', 'Primary');
-            $this->db->update('nurse_assignments', array('assignment_role' => 'Additional'));
-        }
+        $fees = array('per_day_fee' => null, 'per_week_fee' => null, 'per_month_fee' => null);
+        $fees[self::$TERM_FEE_FIELD[$payment_term]] = $billing_amount;
 
-        // Save Assignment
-        $data = array(
-
+        $this->db->insert('nurse_assignments', array_merge(array(
             'nurse_id' => $nurse_id,
             'patient_id' => $patient_id,
             'assignment_role' => $assignment_role,
-
             'start_date' => $start_date,
             'end_date' => $end_date,
-
-            'per_day_fee' => $this->input->post('per_day_fee'),
-            'per_week_fee' => $this->input->post('per_week_fee'),
-            'per_month_fee' => $this->input->post('per_month_fee'),
-
-            'payment_term' => $this->input->post('payment_term'),
-
-            'transport_charge' => $this->input->post('transport_charge'),
-
-            // Transport / Commute frequency (replaces separate start/end dates)
-            'transport_frequency' => $this->input->post('transport_frequency'),
-            'transport_note' => $this->input->post('transport_note')
-
-        );
-
-        $this->db->insert('nurse_assignments', $data);
-
-        // assignment_id
+            'payment_term' => $payment_term,
+        ), $fees, $transport));
         $assignment_id = $this->db->insert_id();
 
-        // billing auto calculate
-        $payment_term = $this->input->post('payment_term');
+        $billing_frequency = self::$TERM_FREQUENCY[$payment_term];
 
-        // Note: nurse_billing.billing_type is ENUM('Daily','Weekly','Monthly'),
-        // so store the matching enum value (not 'Day'/'Week'/'Month').
-        if ($payment_term == 'Day') {
-
-            $billing_type = 'Daily';
-            $billing_amount = $this->input->post('per_day_fee');
-        } elseif ($payment_term == 'Week') {
-
-            $billing_type = 'Weekly';
-            $billing_amount = $this->input->post('per_week_fee');
-        } else {
-
-            $billing_type = 'Monthly';
-            $billing_amount = $this->input->post('per_month_fee');
-        }
-
-        // insert billing
-        $billing = array(
-
+        $this->db->insert('nurse_billing', array_merge(array(
             'assignment_id' => $assignment_id,
-            'billing_type' => $billing_type,
+            'nurse_id' => $nurse_id,
+            'patient_id' => $patient_id,
+            'billing_type' => $billing_frequency,
             'billing_amount' => $billing_amount,
-
             'billing_start_date' => $start_date,
-
-            'transport_charge' => $this->input->post('transport_charge'),
-
-            // Transport / Commute frequency (replaces separate start/end dates)
-            'transport_frequency' => $this->input->post('transport_frequency'),
-            'transport_note' => $this->input->post('transport_note')
-
-        );
-
-        $this->db->insert('nurse_billing', $billing);
+        ), $transport));
 
         // Initial effective-dated billing period for this placement
-        $freq_map = array('Day' => 'Daily', 'Week' => 'Weekly', 'Month' => 'Monthly');
         $u = $this->_current_user();
-        $this->nurse_model->insertBillingPeriod(array(
-            'assignment_id'   => $assignment_id,
-            'nurse_id'        => $nurse_id,
-            'patient_id'      => $this->input->post('patient_id'),
-            'billing_frequency' => isset($freq_map[$payment_term]) ? $freq_map[$payment_term] : 'Daily',
-            'rate'            => $billing_amount,
-            'effective_from'  => $start_date,
-            'effective_to'    => $end_date,
-            'note'            => 'Initial billing arrangement',
-            'created_by'      => $u ? $u->id : null,
-            'created_by_name' => $u ? $u->username : null,
-        ));
+        $this->nurse_model->insertBillingPeriod(array_merge(array(
+            'assignment_id'     => $assignment_id,
+            'nurse_id'          => $nurse_id,
+            'patient_id'        => $patient_id,
+            'billing_frequency' => $billing_frequency,
+            'rate'              => $billing_amount,
+            'effective_from'    => $start_date,
+            'effective_to'      => $end_date,
+            'note'              => 'Initial billing arrangement',
+            'created_by'        => $u ? $u->id : null,
+            'created_by_name'   => $u ? $u->username : null,
+        ), $transport));
 
+        $patient = $this->db->get_where('patient', array('id' => $patient_id))->row();
         audit_log(array(
             'module'      => 'nurse',
             'record_type' => 'nurse_assignment',
             'record_id'   => $assignment_id,
             'action'      => 'Nurse assigned to patient',
-            'new_value'   => 'Patient #' . $this->input->post('patient_id') . ' (' . $this->input->post('assignment_role') . ')',
+            'new_value'   => ($patient ? $patient->name : 'Patient #' . $patient_id) . ' (' . $assignment_role . ')',
+        ));
+        audit_log(array(
+            'module'      => 'nurse',
+            'record_type' => 'nurse',
+            'record_id'   => $nurse_id,
+            'action'      => 'Assigned to patient',
+            'new_value'   => ($patient ? $patient->name : 'Patient #' . $patient_id) . ' (' . $assignment_role . ', ' . date('d M Y', strtotime($start_date)) . ' – ' . date('d M Y', strtotime($end_date)) . ')',
         ));
 
-        $this->session->set_flashdata(
-            'success',
-            'Nurse Assigned Successfully'
-        );
+        $this->session->set_flashdata('success', 'Nurse Assigned Successfully');
+        if (!empty($other_primary)) {
+            $this->session->set_flashdata('warning', $this->_primary_warning($other_primary));
+        }
 
-        // same assign page redirect
-        redirect('nurse/assign/' . $nurse_id);
+        redirect($back);
+    }
+
+    private function _primary_warning($other_primary)
+    {
+        $names = array();
+        foreach ($other_primary as $op) {
+            $names[] = $op->nurse_name . ' (' . date('d M Y', strtotime($op->start_date)) . ' – ' . date('d M Y', strtotime($op->end_date)) . ')';
+        }
+        return 'Note: this patient already has a Primary nurse for overlapping dates: ' . implode(', ', $names)
+            . '. Both assignments are kept as Primary. Edit the assignment if one of them should be Additional.';
+    }
+
+    /**
+     * Transport / commute fields from the posted form.
+     *
+     * @return array|string transport_frequency, transport_charge, transport_note — or an error message
+     */
+    private function _transport_input()
+    {
+        $frequency = $this->input->post('transport_frequency');
+        $charge = $this->input->post('transport_charge');
+        $note = $this->input->post('transport_note', true);
+
+        if (!in_array($frequency, array('Daily', 'Weekly', 'Monthly', 'Flexible'), true)) {
+            $frequency = null;
+        }
+        if ($charge === null || $charge === '') {
+            $charge = 0;
+        }
+        if (!is_numeric($charge) || $charge < 0) {
+            return 'Please enter a valid transport charge.';
+        }
+        if ($charge > 0 && $frequency === null) {
+            return 'Please choose a commute frequency for the transport charge.';
+        }
+        if ($charge == 0) {
+            $frequency = null;
+        }
+
+        return array(
+            'transport_frequency' => $frequency,
+            'transport_charge'    => (float) $charge,
+            'transport_note'      => $frequency === 'Flexible' ? $note : null,
+        );
     }
 
 
@@ -691,60 +795,45 @@ class Nurse extends MX_Controller
         $data['nurses'] = $this->nurse_model->getNurse();
 
         $data['assignments'] = $this->nurse_model->getAssignments($nurse, $search);
+        foreach ($data['assignments'] as $row) {
+            $row->current = $this->nurse_model->getCurrentBillingPeriod($row->id);
+        }
 
         $this->load->view('home/dashboard');
         $this->load->view('assigned_nurses', $data);
         $this->load->view('home/footer');
     }
 
+    // Remove from the nurse's assign page
     public function deleteAssignments($id)
     {
-        // assignment detail fetch karo
-        $assignment = $this->db
-            ->where('id', $id)
-            ->get('nurse_assignments')
-            ->row();
-
-        // agar record mil gaya
-        if ($assignment) {
-
-            // Soft delete (deactivate) - preserve the historical record
-            $this->db->where('id', $id);
-            $this->db->update('nurse_assignments', array(
-                'is_active'  => 0,
-                'deleted_at' => date('Y-m-d H:i:s'),
-            ));
-
-            audit_log(array(
-                'module'      => 'nurse',
-                'record_type' => 'nurse_assignment',
-                'record_id'   => $id,
-                'action'      => 'Assignment removed (soft delete)',
-                'reason'      => $this->input->get('reason'),
-            ));
-
-            $this->session->set_flashdata(
-                'success',
-                'Assignment removed. Historical record preserved.'
-            );
-
-            // same assign page par redirect
-            redirect('nurse/assign/' . $assignment->nurse_id);
-        } else {
-
-            $this->session->set_flashdata(
-                'error',
-                'Assignment Not Found'
-            );
-
-            redirect('assigned_nurses');
-        }
+        $assignment = $this->db->where('id', $id)->get('nurse_assignments')->row();
+        $this->_remove_assignment($assignment, $assignment ? 'nurse/assign/' . $assignment->nurse_id : 'nurse/assignments');
     }
 
+    // Remove from the "Assigned Nurses" list
     public function deleteAssignment($id)
     {
-        // Soft delete (deactivate) - preserve the historical record
-        $this->db->where('id', $id);
+        $assignment = $this->db->where('id', $id)->get('nurse_assignments')->row();
+        $this->_remove_assignment($assignment, 'nurse/assignments');
+    }
+
+    // Soft delete (deactivate) an assignment with a mandatory reason; the record and its billing stay in history
+    private function _remove_assignment($assignment, $back)
+    {
+        if (empty($assignment) || $assignment->is_active == 0) {
+            $this->session->set_flashdata('error', 'Assignment not found or already removed.');
+            redirect($back);
+            return;
+        }
+        $reason = trim((string) $this->input->get('reason', true));
+        if ($reason === '') {
+            $this->session->set_flashdata('error', 'A reason is required to remove an assignment.');
+            redirect($back);
+            return;
+        }
+
+        $this->db->where('id', $assignment->id);
         $this->db->update('nurse_assignments', array(
             'is_active'  => 0,
             'deleted_at' => date('Y-m-d H:i:s'),
@@ -753,65 +842,187 @@ class Nurse extends MX_Controller
         audit_log(array(
             'module'      => 'nurse',
             'record_type' => 'nurse_assignment',
-            'record_id'   => $id,
+            'record_id'   => $assignment->id,
             'action'      => 'Assignment removed (soft delete)',
-            'reason'      => $this->input->get('reason'),
+            'reason'      => $reason,
+        ));
+        audit_log(array(
+            'module'      => 'nurse',
+            'record_type' => 'nurse',
+            'record_id'   => $assignment->nurse_id,
+            'action'      => 'Assignment removed',
+            'new_value'   => $this->db->get_where('patient', array('id' => $assignment->patient_id))->row('name'),
+            'reason'      => $reason,
         ));
 
         $this->session->set_flashdata('success', 'Assignment removed. Historical record preserved.');
-
-        redirect('nurse/assignments');
+        redirect($back);
     }
 
 
     public function editAssignment($id)
     {
+        $data['assignment'] = $this->nurse_model->getAssignmentDetail($id);
+        if (empty($data['assignment'])) {
+            show_404();
+            return;
+        }
 
-        $data['assignment'] = $this->db
-            ->where('id', $id)
-            ->get('nurse_assignments')
-            ->row();
-
-        $data['nurses'] = $this->nurse_model->getNurse();
+        $data['current'] = $this->nurse_model->getCurrentBillingPeriod($id);
+        $data['periods'] = $this->nurse_model->getBillingPeriods($id);
+        $data['audit'] = audit_get('nurse_assignment', $id);
+        $this->db->group_start();
+        $this->db->where('is_active', 1);
+        $this->db->or_where('id', $data['assignment']->patient_id);
+        $this->db->group_end();
         $data['patients'] = $this->db->get('patient')->result();
+        $data['return'] = $this->input->get('return') === 'assign' ? 'assign' : 'list';
 
         $this->load->view('home/dashboard');
         $this->load->view('edit_assignment', $data);
         $this->load->view('home/footer');
     }
+
+    // Edit an assignment. Date/patient/role changes are written to the audit trail;
+    // fee and transport changes become a new effective-dated billing period.
     public function updateAssignment()
     {
-
         $id = $this->input->post('id');
+        $old = $this->nurse_model->getAssignmentDetail($id);
+        if (empty($old)) {
+            show_404();
+            return;
+        }
 
-        $data = array(
+        $return = $this->input->post('return') === 'assign' ? 'assign' : 'list';
+        $back_edit = 'nurse/editAssignment/' . $id . '?return=' . $return;
+        $back = $return === 'assign' ? 'nurse/assign/' . $old->nurse_id : 'nurse/assignments';
 
-            'patient_id' => $this->input->post('patient_id'),
-            'assignment_role' => $this->input->post('assignment_role'),
+        $patient_id = $this->input->post('patient_id');
+        $role = $this->input->post('assignment_role') === 'Additional' ? 'Additional' : 'Primary';
+        $start_date = $this->input->post('start_date');
+        $end_date = $this->input->post('end_date');
+        $reason = $this->input->post('reason', true);
 
-            'start_date' => $this->input->post('start_date'),
-            'end_date' => $this->input->post('end_date'),
+        $payment_term = $this->input->post('payment_term');
+        if (!isset(self::$TERM_FREQUENCY[$payment_term])) {
+            $payment_term = 'Day';
+        }
+        $rate = $this->input->post(self::$TERM_FEE_FIELD[$payment_term]);
+        $transport = $this->_transport_input();
 
-            'per_day_fee' => $this->input->post('per_day_fee'),
-            'per_week_fee' => $this->input->post('per_week_fee'),
-            'per_month_fee' => $this->input->post('per_month_fee'),
+        $error = null;
+        if (empty($patient_id) || empty($start_date) || empty($end_date)) {
+            $error = 'Please select a patient and provide start and end dates.';
+        } elseif ($end_date < $start_date) {
+            $error = 'End date cannot be before start date.';
+        } elseif (!is_numeric($rate) || $rate < 0) {
+            $error = 'Please enter a valid fee.';
+        } elseif (is_string($transport)) {
+            $error = $transport;
+        }
+        if (!$error) {
+            $this->db->where('nurse_id', $old->nurse_id);
+            $this->db->where('is_active', 1);
+            $this->db->where('id !=', $id);
+            $this->db->where('start_date <=', $end_date);
+            $this->db->where('end_date >=', $start_date);
+            if ($this->db->get('nurse_assignments')->num_rows() > 0) {
+                $error = 'Nurse already assigned to another patient for these dates.';
+            }
+        }
+        if ($error) {
+            $this->session->set_flashdata('error', $error);
+            redirect($back_edit);
+            return;
+        }
 
-            'payment_term' => $this->input->post('payment_term'),
+        // 1) Patient / role / dates
+        $changes = array();
+        $labels = array('patient_id' => 'Patient', 'assignment_role' => 'Role', 'start_date' => 'Start date', 'end_date' => 'End date');
+        $new_values = array('patient_id' => $patient_id, 'assignment_role' => $role, 'start_date' => $start_date, 'end_date' => $end_date);
+        foreach ($labels as $field => $label) {
+            if ((string) $old->$field !== (string) $new_values[$field]) {
+                $changes[$field] = $label;
+            }
+        }
 
-            'transport_charge' => $this->input->post('transport_charge'),
+        if (!empty($changes)) {
+            $this->db->where('id', $id);
+            $this->db->update('nurse_assignments', $new_values);
 
-            // Transport / Commute frequency (replaces separate start/end dates)
-            'transport_frequency' => $this->input->post('transport_frequency'),
-            'transport_note' => $this->input->post('transport_note')
+            if (isset($changes['patient_id'])) {
+                $this->db->where('assignment_id', $id);
+                $this->db->update('nurse_billing_periods', array('patient_id' => $patient_id));
+            }
+            if (isset($changes['start_date'])) {
+                $first = $this->nurse_model->getFirstBillingPeriod($id);
+                if ($first && ($first->effective_from == $old->start_date || $start_date < $first->effective_from)) {
+                    $this->nurse_model->updateBillingPeriod($first->id, array('effective_from' => $start_date));
+                }
+            }
+            if (isset($changes['end_date'])) {
+                $last = $this->nurse_model->getCurrentBillingPeriod($id);
+                if ($last) {
+                    $this->nurse_model->closeBillingPeriod($last->id, $end_date);
+                }
+            }
 
-        );
+            foreach ($changes as $field => $label) {
+                $old_value = $old->$field;
+                $new_value = $new_values[$field];
+                if ($field === 'patient_id') {
+                    $new_patient = $this->db->get_where('patient', array('id' => $patient_id))->row();
+                    $old_value = $old->patient_name;
+                    $new_value = $new_patient ? $new_patient->name : '#' . $patient_id;
+                }
+                audit_log(array(
+                    'module'      => 'nurse',
+                    'record_type' => 'nurse_assignment',
+                    'record_id'   => $id,
+                    'action'      => $label . ' changed',
+                    'field'       => $field,
+                    'old_value'   => $old_value,
+                    'new_value'   => $new_value,
+                    'reason'      => $reason,
+                ));
+            }
+        }
 
-        $this->db->where('id', $id);
-        $this->db->update('nurse_assignments', $data);
+        // 2) Fee / transport (effective-dated)
+        $assignment = $this->nurse_model->getAssignmentDetail($id);
+        $current = $this->nurse_model->getCurrentBillingPeriod($id);
+        $new = array_merge(array(
+            'billing_frequency' => self::$TERM_FREQUENCY[$payment_term],
+            'rate' => $rate,
+        ), $transport);
 
-        $this->session->set_flashdata('success', 'Assignment Updated');
+        $billing_changed = false;
+        if (!$current || $this->_arrangement_differs($current, $new)) {
+            $effective_from = $this->input->post('effective_from') ?: $start_date;
+            $result = $this->_apply_billing_change($assignment, $new, $effective_from, $reason);
+            if ($result !== true) {
+                $this->session->set_flashdata('error', (!empty($changes) ? 'Dates/role were saved, but the fee/transport change was not applied: ' : '') . $result);
+                redirect($back_edit);
+                return;
+            }
+            $billing_changed = true;
+        }
 
-        redirect('nurse/assignments');
+        if (empty($changes) && !$billing_changed) {
+            $this->session->set_flashdata('success', 'No changes were made.');
+        } else {
+            $this->session->set_flashdata('success', 'Assignment updated. Previous values are kept in the history.');
+        }
+
+        if ($role === 'Primary' && (isset($changes['assignment_role']) || isset($changes['start_date']) || isset($changes['end_date']) || isset($changes['patient_id']))) {
+            $other_primary = $this->nurse_model->getOverlappingPrimary($patient_id, $start_date, $end_date, $id);
+            if (!empty($other_primary)) {
+                $this->session->set_flashdata('warning', $this->_primary_warning($other_primary));
+            }
+        }
+
+        redirect($back);
     }
 
 
@@ -836,6 +1047,13 @@ public function billing($assignment_id)
         $data['assignment']->end_date,
         $data['periods']
     );
+    $data['accrued'] = billing_assignment_breakdown(
+        $data['assignment']->start_date,
+        $data['assignment']->end_date,
+        $data['periods'],
+        date('Y-m-d')
+    );
+    $data['audit'] = audit_get('nurse_assignment', $assignment_id);
 
     $this->load->view('home/dashboard');
     $this->load->view('nurse_billing', $data);
@@ -846,83 +1064,143 @@ public function billing($assignment_id)
 public function changeBilling()
 {
     $assignment_id = $this->input->post('assignment_id');
-    $new_frequency = $this->input->post('billing_frequency');
-    $new_rate = $this->input->post('rate');
-    $effective_from = $this->input->post('effective_from');
-    $note = $this->input->post('note');
-
     $assignment = $this->nurse_model->getAssignmentDetail($assignment_id);
     if (empty($assignment)) {
         show_404();
         return;
     }
 
-    // Validate input
-    $allowed_freq = array('Daily', 'Weekly', 'Monthly');
-    if (!in_array($new_frequency, $allowed_freq, true) || !is_numeric($new_rate) || $new_rate < 0 || empty($effective_from)) {
-        $this->session->set_flashdata('error', 'Please provide a valid frequency, non-negative rate and effective date.');
-        redirect('nurse/billing/' . $assignment_id);
-        return;
+    $transport = $this->_transport_input();
+    if (is_string($transport)) {
+        $result = $transport;
+    } else {
+        $result = $this->_apply_billing_change($assignment, array_merge(array(
+            'billing_frequency' => $this->input->post('billing_frequency'),
+            'rate' => $this->input->post('rate'),
+        ), $transport), $this->input->post('effective_from'), $this->input->post('note', true));
     }
 
-    $current = $this->nurse_model->getCurrentBillingPeriod($assignment_id);
-
-    // The new arrangement must start after the current one began, and within the placement.
-    if ($current && $effective_from <= $current->effective_from) {
-        $this->session->set_flashdata('error', 'The effective date must be after the current arrangement started (' . $current->effective_from . ').');
-        redirect('nurse/billing/' . $assignment_id);
-        return;
+    if ($result === true) {
+        $this->session->set_flashdata('success', 'Billing arrangement updated. Previous arrangement preserved in history.');
+    } else {
+        $this->session->set_flashdata('error', $result);
     }
+    redirect('nurse/billing/' . $assignment_id);
+}
+
+private function _arrangement_differs($current, $new)
+{
+    $cur_tf = (float) $current->transport_charge > 0 ? $current->transport_frequency : null;
+    $new_tf = (float) $new['transport_charge'] > 0 ? $new['transport_frequency'] : null;
+
+    return $current->billing_frequency !== $new['billing_frequency']
+        || round((float) $current->rate, 2) != round((float) $new['rate'], 2)
+        || $cur_tf !== $new_tf
+        || round((float) $current->transport_charge, 2) != round((float) $new['transport_charge'], 2)
+        || ($new_tf === 'Flexible' && (string) $current->transport_note !== (string) $new['transport_note']);
+}
+
+private function _describe_arrangement($p)
+{
+    $p = (object) $p;
+    $text = $p->billing_frequency . ' @ ' . number_format((float) $p->rate, 2);
+    if ((float) $p->transport_charge > 0) {
+        $text .= '; transport ' . $p->transport_frequency . ' @ ' . number_format((float) $p->transport_charge, 2);
+    }
+    return $text;
+}
+
+/**
+ * Start a new billing arrangement (rate, frequency, transport) from $effective_from.
+ * The current arrangement is closed the day before; if the new one starts on the
+ * same day as the current one, the current one is marked superseded (a correction).
+ * Nothing is deleted.
+ *
+ * @return true|string true on success, otherwise an error message
+ */
+private function _apply_billing_change($assignment, $new, $effective_from, $note)
+{
+    if (!in_array($new['billing_frequency'], array('Daily', 'Weekly', 'Monthly'), true) || !is_numeric($new['rate']) || $new['rate'] < 0) {
+        return 'Please provide a valid billing frequency and a non-negative rate.';
+    }
+    if (empty($effective_from) || !strtotime($effective_from)) {
+        return 'Please provide a valid effective date.';
+    }
+    $effective_from = date('Y-m-d', strtotime($effective_from));
+
     if (!empty($assignment->start_date) && $effective_from < $assignment->start_date) {
-        $this->session->set_flashdata('error', 'The effective date cannot be before the placement start date.');
-        redirect('nurse/billing/' . $assignment_id);
-        return;
+        return 'The effective date cannot be before the placement start date (' . date('d M Y', strtotime($assignment->start_date)) . ').';
+    }
+    if (!empty($assignment->end_date) && $effective_from > $assignment->end_date) {
+        return 'The effective date is after the placement ends (' . date('d M Y', strtotime($assignment->end_date)) . '). Extend the service duration first.';
     }
 
-    // Close the current open period the day before the new one takes effect,
-    // preserving the previous arrangement in history.
-    if ($current) {
-        $close_date = date('Y-m-d', strtotime($effective_from . ' -1 day'));
-        $this->nurse_model->closeBillingPeriod($current->id, $close_date);
+    $current = $this->nurse_model->getCurrentBillingPeriod($assignment->id);
+    if ($current && $effective_from < $current->effective_from) {
+        return 'The effective date must be on or after the date the current arrangement started (' . date('d M Y', strtotime($current->effective_from)) . ').';
+    }
+    if ($current && !$this->_arrangement_differs($current, $new)) {
+        return 'Nothing changed: the rate, frequency and transport are the same as the current arrangement.';
+    }
+
+    $correction = $current && $effective_from == $current->effective_from;
+    if ($correction) {
+        $this->nurse_model->supersedeBillingPeriod($current->id);
+    } elseif ($current) {
+        $this->nurse_model->closeBillingPeriod($current->id, billing_add_days($effective_from, -1));
     }
 
     $u = $this->_current_user();
     $this->nurse_model->insertBillingPeriod(array(
-        'assignment_id'     => $assignment_id,
-        'nurse_id'          => $assignment->nurse_id,
-        'patient_id'        => $assignment->patient_id,
-        'billing_frequency' => $new_frequency,
-        'rate'              => $new_rate,
-        'effective_from'    => $effective_from,
-        'effective_to'      => $assignment->end_date,
-        'note'              => $note,
-        'created_by'        => $u ? $u->id : null,
-        'created_by_name'   => $u ? $u->username : null,
+        'assignment_id'       => $assignment->id,
+        'nurse_id'            => $assignment->nurse_id,
+        'patient_id'          => $assignment->patient_id,
+        'billing_frequency'   => $new['billing_frequency'],
+        'rate'                => $new['rate'],
+        'transport_frequency' => $new['transport_frequency'],
+        'transport_charge'    => $new['transport_charge'],
+        'transport_note'      => $new['transport_note'],
+        'effective_from'      => $effective_from,
+        'effective_to'        => $assignment->end_date,
+        'note'                => $note,
+        'created_by'          => $u ? $u->id : null,
+        'created_by_name'     => $u ? $u->username : null,
     ));
 
-    // Keep the assignment's "headline" term/rate in sync with the latest arrangement
-    $term_map = array('Daily' => 'Day', 'Weekly' => 'Week', 'Monthly' => 'Month');
-    $this->db->where('id', $assignment_id);
-    $this->db->update('nurse_assignments', array(
-        'payment_term' => isset($term_map[$new_frequency]) ? $term_map[$new_frequency] : 'Day',
-    ));
+    // Keep the assignment's "headline" values in sync with the latest arrangement
+    $term = array_search($new['billing_frequency'], self::$TERM_FREQUENCY, true);
+    $headline = array('per_day_fee' => null, 'per_week_fee' => null, 'per_month_fee' => null);
+    $headline[self::$TERM_FEE_FIELD[$term]] = $new['rate'];
+    $transport = array(
+        'transport_frequency' => $new['transport_frequency'],
+        'transport_charge'    => $new['transport_charge'],
+        'transport_note'      => $new['transport_note'],
+    );
+
+    $this->db->where('id', $assignment->id);
+    $this->db->update('nurse_assignments', array_merge(array('payment_term' => $term), $headline, $transport));
+
+    $this->db->where('assignment_id', $assignment->id);
+    $this->db->update('nurse_billing', array_merge(array(
+        'billing_type'   => $new['billing_frequency'],
+        'billing_amount' => $new['rate'],
+    ), $transport));
 
     audit_log(array(
         'module'      => 'nurse',
         'record_type' => 'nurse_assignment',
-        'record_id'   => $assignment_id,
-        'action'      => 'Billing arrangement changed',
+        'record_id'   => $assignment->id,
+        'action'      => $correction ? 'Billing arrangement corrected' : 'Billing arrangement changed',
         'field'       => 'billing',
-        'old_value'   => $current ? ($current->billing_frequency . ' @ ' . $current->rate) : null,
-        'new_value'   => $new_frequency . ' @ ' . $new_rate . ' (from ' . $effective_from . ')',
+        'old_value'   => $current ? $this->_describe_arrangement($current) : null,
+        'new_value'   => $this->_describe_arrangement($new) . ' (from ' . date('d M Y', strtotime($effective_from)) . ')',
         'reason'      => $note,
     ));
 
-    $this->session->set_flashdata('success', 'Billing arrangement updated. Previous arrangement preserved in history.');
-    redirect('nurse/billing/' . $assignment_id);
+    return true;
 }
 
-// Extend the service duration of a placement
+// Change (extend or shorten) the service duration of a placement
 public function extendService()
 {
     $assignment_id = $this->input->post('assignment_id');
@@ -934,87 +1212,165 @@ public function extendService()
         return;
     }
 
-    // Validate: a valid new end date, not before the placement start
+    $current = $this->nurse_model->getCurrentBillingPeriod($assignment_id);
+
     if (empty($new_end_date) || (!empty($assignment->start_date) && $new_end_date < $assignment->start_date)) {
         $this->session->set_flashdata('error', 'Please provide a valid end date on or after the placement start date.');
+        redirect('nurse/billing/' . $assignment_id);
+        return;
+    }
+    if ($current && $new_end_date < $current->effective_from) {
+        $this->session->set_flashdata('error', 'The new end date is before the current billing arrangement started (' . date('d M Y', strtotime($current->effective_from)) . ').');
+        redirect('nurse/billing/' . $assignment_id);
+        return;
+    }
+    if ($new_end_date == $assignment->end_date) {
+        $this->session->set_flashdata('error', 'The end date is unchanged.');
         redirect('nurse/billing/' . $assignment_id);
         return;
     }
 
     $this->nurse_model->updateAssignmentEndDate($assignment_id, $new_end_date);
 
-    // Extend the current open billing period to the new end date so it keeps applying
-    $current = $this->nurse_model->getCurrentBillingPeriod($assignment_id);
+    // The current billing arrangement keeps applying up to the new end date
     if ($current) {
         $this->nurse_model->closeBillingPeriod($current->id, $new_end_date);
     }
 
-    $this->session->set_flashdata('success', 'Service duration extended.');
+    audit_log(array(
+        'module'      => 'nurse',
+        'record_type' => 'nurse_assignment',
+        'record_id'   => $assignment_id,
+        'action'      => $new_end_date > $assignment->end_date ? 'Service duration extended' : 'Service duration shortened',
+        'field'       => 'end_date',
+        'old_value'   => $assignment->end_date,
+        'new_value'   => $new_end_date,
+        'reason'      => $this->input->post('note', true),
+    ));
+
+    $this->session->set_flashdata('success', 'Service end date changed from ' . date('d M Y', strtotime($assignment->end_date)) . ' to ' . date('d M Y', strtotime($new_end_date)) . '.');
     redirect('nurse/billing/' . $assignment_id);
 }
 
 
-// ================= PAYMENT PAGE =================
+// ================= PAYMENT LEDGER =================
+
+// Billing arrangement built from the assignment itself, for placements with no billing period recorded
+private function _legacy_period($a)
+{
+    $term = isset(self::$TERM_FREQUENCY[$a->payment_term]) ? $a->payment_term : 'Day';
+    $fee_field = self::$TERM_FEE_FIELD[$term];
+    return (object) array(
+        'id'                  => null,
+        'effective_from'      => $a->start_date,
+        'effective_to'        => $a->end_date,
+        'billing_frequency'   => self::$TERM_FREQUENCY[$term],
+        'rate'                => (float) $a->$fee_field,
+        'transport_frequency' => $a->transport_frequency,
+        'transport_charge'    => (float) $a->transport_charge,
+        'is_superseded'       => 0,
+    );
+}
+
+/**
+ * Everything owed to / paid to a nurse up to $today: per active assignment the
+ * contract total, the amount accrued till today, payments applied and the amount
+ * due; plus the payable units (days/weeks/months) used by the unpaid page.
+ */
+private function _ledger($nurse_id, $today)
+{
+    $assignments = $this->nurse_model->getNurseAssignments($nurse_id, true);
+    $all_units = array();
+
+    foreach ($assignments as $a) {
+        $periods = $this->nurse_model->getBillingPeriods($a->id);
+        $active = billing_active_periods($periods);
+        if (empty($active)) {
+            $periods = array($this->_legacy_period($a));
+            $active = $periods;
+        }
+        $a->current = end($active);
+        $a->contract = billing_assignment_breakdown($a->start_date, $a->end_date, $periods);
+        $a->units = billing_build_units($a->id, $a->start_date, $a->end_date, $periods, $today);
+        $all_units = array_merge($all_units, $a->units);
+    }
+
+    $payments = $this->nurse_model->getPayments($nurse_id);
+    $allocation = billing_allocate_payments($all_units, $payments);
+
+    $totals = array('contract' => 0.0, 'till_today' => 0.0, 'due_today' => 0.0, 'paid' => 0.0);
+    foreach ($assignments as $a) {
+        $a->till_today = 0.0;
+        $a->paid_applied = 0.0;
+        $a->unpaid_units = 0;
+        foreach ($a->units as $unit) {
+            $a->till_today += $unit->amount;
+            $a->paid_applied += $unit->paid;
+            if ($unit->amount - $unit->paid > 0.004) {
+                $a->unpaid_units++;
+            }
+        }
+        $a->due_today = round($a->till_today - $a->paid_applied, 2);
+        $a->credit = isset($allocation['assignment_credit'][$a->id]) ? $allocation['assignment_credit'][$a->id] : 0.0;
+
+        $totals['contract'] += $a->contract['total'];
+        $totals['till_today'] += $a->till_today;
+        $totals['due_today'] += $a->due_today;
+    }
+    foreach ($payments as $p) {
+        $totals['paid'] += $p->amount;
+    }
+    $totals['balance_till_today'] = round($totals['till_today'] - $totals['paid'], 2);
+    $totals['remaining_contract'] = round($totals['contract'] - $totals['paid'], 2);
+    $totals['credit'] = $allocation['general_credit'] + array_sum($allocation['assignment_credit']);
+
+    return array(
+        'today'       => $today,
+        'assignments' => $assignments,
+        'payments'    => $payments,
+        'totals'      => $totals,
+    );
+}
 
 public function payment($nurse_id)
 {
-
-    $this->db->select('
-        nurse_billing.*,
-        nurse_assignments.nurse_id,
-        nurse_assignments.start_date,
-        nurse_assignments.end_date,
-        patient.name as patient_name,
-        nurse.name as nurse_name
-    ');
-
-    $this->db->from('nurse_billing');
-
-    $this->db->join(
-        'nurse_assignments',
-        'nurse_assignments.id = nurse_billing.assignment_id'
-    );
-
-    $this->db->join(
-        'patient',
-        'patient.id = nurse_assignments.patient_id'
-    );
-
-    $this->db->join(
-        'nurse',
-        'nurse.id = nurse_assignments.nurse_id'
-    );
-
-    $this->db->where('nurse_assignments.nurse_id', $nurse_id);
-
-    $records = $this->db->get()->result();
-
-    // Compute each placement's billing using the effective-dated periods,
-    // rounding up to whole billing periods (see billing_helper).
-    foreach ($records as $rec) {
-        $periods = $this->nurse_model->getBillingPeriods($rec->assignment_id);
-        if (!empty($periods)) {
-            $bd = billing_assignment_breakdown($rec->start_date, $rec->end_date, $periods);
-            $rec->calc_total = $bd['total'];
-        } else {
-            // Fallback for legacy rows with no billing period recorded
-            $days = billing_days_inclusive($rec->start_date, $rec->end_date);
-            $freq = ($rec->billing_type == 'Weekly') ? 'Weekly' : (($rec->billing_type == 'Monthly') ? 'Monthly' : 'Daily');
-            $rec->calc_total = billing_period_charge($rec->billing_amount, $freq, $days);
-        }
-        $rec->calc_days = billing_days_inclusive($rec->start_date, $rec->end_date);
+    $nurse = $this->nurse_model->getNurseById($nurse_id);
+    if (empty($nurse)) {
+        show_404();
+        return;
     }
-    $data['records'] = $records;
 
-    // Payment History
-    $this->db->where('nurse_id', $nurse_id);
-    $data['payments'] = $this->db->get('nurse_payments')->result();
+    $data = $this->_ledger($nurse_id, date('Y-m-d'));
+    $data['nurse'] = $nurse;
+    $data['prefill'] = array(
+        'assignment_id' => $this->input->get('assignment_id'),
+        'period_from'   => $this->input->get('period_from'),
+        'period_to'     => $this->input->get('period_to'),
+        'amount'        => $this->input->get('amount'),
+    );
 
     $this->load->view('home/dashboard');
     $this->load->view('nurse_payment', $data);
     $this->load->view('home/footer');
 }
 
+// Days (daily billing), weeks (weekly) or months (monthly) the nurse has not been paid for yet
+public function unpaid($nurse_id)
+{
+    $nurse = $this->nurse_model->getNurseById($nurse_id);
+    if (empty($nurse)) {
+        show_404();
+        return;
+    }
+
+    $data = $this->_ledger($nurse_id, date('Y-m-d'));
+    $data['nurse'] = $nurse;
+    $data['show_all'] = (bool) $this->input->get('all');
+
+    $this->load->view('home/dashboard');
+    $this->load->view('nurse_unpaid', $data);
+    $this->load->view('home/footer');
+}
 
 
 // ================= SAVE PAYMENT =================
@@ -1022,31 +1378,73 @@ public function payment($nurse_id)
 public function addPayment()
 {
     $nurse_id = $this->input->post('nurse_id');
-    $amount = $this->input->post('amount');
-
-    // Validate
-    if (empty($nurse_id) || !is_numeric($amount) || $amount < 0) {
-        $this->session->set_flashdata('error', 'Please enter a valid payment amount.');
-        redirect('nurse/payment/' . $nurse_id);
+    $nurse = $this->nurse_model->getNurseById($nurse_id);
+    if (empty($nurse)) {
+        redirect('nurse');
         return;
     }
 
-    $data = array(
-        'nurse_id' => $nurse_id,
-        'amount' => $amount,
-        'payment_date' => $this->input->post('payment_date'),
-        'note' => $this->input->post('note')
-    );
+    $back = $this->input->post('return') === 'unpaid' ? 'nurse/unpaid/' . $nurse_id : 'nurse/payment/' . $nurse_id;
+    $amount = $this->input->post('amount');
+    $payment_date = $this->input->post('payment_date') ?: date('Y-m-d');
+    $assignment_id = $this->input->post('assignment_id') ?: null;
+    $period_from = $this->input->post('period_from') ?: null;
+    $period_to = $this->input->post('period_to') ?: null;
 
-    $this->db->insert('nurse_payments', $data);
+    $assignment = null;
+    if ($assignment_id) {
+        $assignment = $this->db->get_where('nurse_assignments', array('id' => $assignment_id, 'nurse_id' => $nurse_id))->row();
+    }
 
-    $this->session->set_flashdata(
-        'success',
-        'Payment Added Successfully'
-    );
+    $error = null;
+    if (!is_numeric($amount) || $amount <= 0) {
+        $error = 'Please enter a valid payment amount.';
+    } elseif (!strtotime($payment_date)) {
+        $error = 'Please enter a valid payment date.';
+    } elseif ($assignment_id && empty($assignment)) {
+        $error = 'The selected assignment does not belong to this nurse.';
+    } elseif (($period_from && !$period_to) || (!$period_from && $period_to)) {
+        $error = 'Please provide both "covers from" and "covers to" dates, or leave both empty.';
+    } elseif ($period_from && $period_to < $period_from) {
+        $error = '"Covers to" cannot be before "covers from".';
+    } elseif ($period_from && !$assignment_id) {
+        $error = 'Please choose the assignment the covered period belongs to.';
+    }
+    if ($error) {
+        $this->session->set_flashdata('error', $error);
+        redirect($back);
+        return;
+    }
 
-    // Redirect to the nurse's payment page (avoid trusting the Referer header)
-    redirect('nurse/payment/' . $nurse_id);
+    $u = $this->_current_user();
+    $is_advance = $this->input->post('is_advance') ? 1 : 0;
+    $this->nurse_model->insertPayment(array(
+        'nurse_id'         => $nurse_id,
+        'assignment_id'    => $assignment_id,
+        'amount'           => $amount,
+        'payment_date'     => $payment_date,
+        'period_from'      => $period_from,
+        'period_to'        => $period_to,
+        'is_advance'       => $is_advance,
+        'note'             => $this->input->post('note', true),
+        'recorded_by_name' => $u ? $u->username : null,
+    ));
+
+    $detail = number_format((float) $amount, 2) . ' on ' . date('d M Y', strtotime($payment_date));
+    if ($period_from) {
+        $detail .= ' for ' . date('d M Y', strtotime($period_from)) . ' – ' . date('d M Y', strtotime($period_to));
+    }
+    audit_log(array(
+        'module'      => 'nurse',
+        'record_type' => 'nurse',
+        'record_id'   => $nurse_id,
+        'action'      => $is_advance ? 'Advance payment recorded' : 'Payment recorded',
+        'new_value'   => $detail,
+        'reason'      => $this->input->post('note', true),
+    ));
+
+    $this->session->set_flashdata('success', 'Payment Added Successfully');
+    redirect($back);
 }
 }
 

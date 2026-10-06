@@ -35,6 +35,11 @@ class Patient extends MX_Controller
         $data['doctors'] = $this->doctor_model->getDoctor();
         $data['groups'] = $this->donor_model->getBloodBank();
         $data['settings'] = $this->settings_model->getSettings();
+        // Active nurses for the "Assign Nurse" popup (admin only)
+        $data['nurses'] = array();
+        if ($this->ion_auth->in_group('admin')) {
+            $data['nurses'] = $this->db->where('is_active', 1)->order_by('name', 'ASC')->get('nurse')->result();
+        }
         $this->load->view('home/dashboard'); // just the header file
         $this->load->view('patient', $data);
         $this->load->view('home/footer'); // just the header file
@@ -74,7 +79,7 @@ class Patient extends MX_Controller
         if (empty($redirect)) {
             $redirect = $this->input->post('redirect');
         }
-        $name = $this->input->post('name');
+        $name = trim((string) $this->input->post('name'));
         $password = $this->input->post('password');
         $sms = $this->input->post('sms');
         $doctor = $this->input->post('doctor');
@@ -328,11 +333,55 @@ class Patient extends MX_Controller
         echo json_encode($data);
     }
 
+    /**
+     * Who may add Recovery Journal entries for a patient: admins, nurses with an
+     * active assignment to the patient, and the patient's assigned doctor.
+     *
+     * @return array allowed (bool), role ('Nurse' / 'Doctor', or null = admin chooses)
+     */
+    private function _journal_access($patient)
+    {
+        $user = $this->ion_auth->user()->row();
+        if (empty($patient) || empty($user)) {
+            return array('allowed' => false, 'role' => null);
+        }
+        if ($this->ion_auth->in_group('admin')) {
+            return array('allowed' => true, 'role' => null);
+        }
+        if ($this->ion_auth->in_group('Nurse')) {
+            $nurse = $this->db->get_where('nurse', array('ion_user_id' => $user->id))->row();
+            if ($nurse) {
+                $this->db->where('nurse_id', $nurse->id);
+                $this->db->where('patient_id', $patient->id);
+                $this->db->where('is_active', 1);
+                $this->db->where('end_date >=', date('Y-m-d'));
+                if ($this->db->count_all_results('nurse_assignments') > 0) {
+                    return array('allowed' => true, 'role' => 'Nurse');
+                }
+            }
+        }
+        if ($this->ion_auth->in_group('Doctor')) {
+            $doctor = $this->db->get_where('doctor', array('ion_user_id' => $user->id))->row();
+            if ($doctor && $doctor->id == $patient->doctor) {
+                return array('allowed' => true, 'role' => 'Doctor');
+            }
+        }
+        return array('allowed' => false, 'role' => null);
+    }
+
     function patientDetails()
     {
+        if ($this->ion_auth->in_group(array('Patient'))) {
+            redirect('home/permission');
+        }
         $data = array();
         $id = $this->input->get('id');
         $data['patient'] = $this->patient_model->getPatientById($id);
+        if (empty($data['patient'])) {
+            show_404();
+            return;
+        }
+        $data['journal_access'] = $this->_journal_access($data['patient']);
 
         // Assigned Care Team - currently assigned bedside nurse(s)
         $today = date('Y-m-d');
@@ -354,6 +403,14 @@ class Patient extends MX_Controller
         $this->db->order_by('id', 'DESC');
         $data['recovery_journal'] = $this->db->get('patient_recovery_journal')->result();
 
+        // Nurse & business feedback received for this patient
+        $this->db->select('feedback.*, nurse.name as nurse_name');
+        $this->db->from('feedback');
+        $this->db->join('nurse', 'nurse.id = feedback.nurse_id', 'left');
+        $this->db->where('feedback.patient_id', $id);
+        $this->db->order_by('feedback.id', 'DESC');
+        $data['feedback'] = $this->db->get()->result();
+
         $this->load->view('home/dashboard'); // just the header file
         $this->load->view('details', $data);
         $this->load->view('home/footer'); // just the footer file
@@ -363,21 +420,42 @@ class Patient extends MX_Controller
     public function addRecoveryJournal()
     {
         $patient_id = $this->input->post('patient_id');
+        $patient = $this->patient_model->getPatientById($patient_id);
+        $access = $this->_journal_access($patient);
+
+        if (!$access['allowed']) {
+            $this->session->set_flashdata('journal_error', 'Only nurses assigned to this patient, the assigned doctor or an administrator can add journal entries.');
+            redirect('patient/patientDetails?id=' . $patient_id);
+            return;
+        }
+
+        $notes = trim((string) $this->input->post('notes', true));
+        if ($notes === '') {
+            $this->session->set_flashdata('journal_error', 'Please enter the update / notes.');
+            redirect('patient/patientDetails?id=' . $patient_id);
+            return;
+        }
+
+        $role = $access['role'];
+        if ($role === null) {
+            $role = $this->input->post('role') === 'Doctor' ? 'Doctor' : 'Nurse';
+        }
+
+        $entry_datetime = $this->input->post('entry_datetime');
+        $entry_datetime = ($entry_datetime && strtotime($entry_datetime)) ? date('Y-m-d H:i:s', strtotime($entry_datetime)) : date('Y-m-d H:i:s');
 
         $u = $this->ion_auth->user()->row();
 
-        $entry = array(
+        $this->db->insert('patient_recovery_journal', array(
             'patient_id'      => $patient_id,
-            'entry_datetime'  => $this->input->post('entry_datetime') ?: date('Y-m-d H:i:s'),
-            'notes'           => $this->input->post('notes', true),
-            'role'            => $this->input->post('role', true),
+            'entry_datetime'  => $entry_datetime,
+            'notes'           => $notes,
+            'role'            => $role,
             'entered_by'      => $u ? $u->id : null,
             'entered_by_name' => $u ? $u->username : null,
-        );
+        ));
 
-        $this->db->insert('patient_recovery_journal', $entry);
-
-        $this->session->set_flashdata('feedback', 'Recovery journal entry added.');
+        $this->session->set_flashdata('journal_success', 'Recovery journal entry added.');
         redirect('patient/patientDetails?id=' . $patient_id);
     }
 
@@ -1279,21 +1357,93 @@ class Patient extends MX_Controller
         }
     }
 
+    // Archive (soft delete) a patient. The record and all related history (assignments,
+    // billing, journal, invoices) are preserved; the patient login is deactivated.
     function delete()
     {
-        $data = array();
-        $id = $this->input->get('id');
-        $user_data = $this->db->get_where('patient', array('id' => $id))->row();
-        $path = $user_data->img_url;
-
-        if (!empty($path)) {
-            unlink($path);
+        if (!$this->ion_auth->in_group('admin')) {
+            redirect('home/permission');
+            return;
         }
-        $ion_user_id = $user_data->ion_user_id;
-        $this->db->where('id', $ion_user_id);
-        $this->db->delete('users');
-        $this->patient_model->delete($id);
-        $this->session->set_flashdata('feedback', lang('deleted'));
+        $this->load->helper('audit');
+        $id = $this->input->get('id');
+        $reason = trim((string) $this->input->get('reason', true));
+        $patient = $this->patient_model->getPatientById($id);
+
+        if (empty($patient) || $patient->is_active == 0) {
+            $this->session->set_flashdata('error', 'Patient not found or already archived.');
+            redirect('patient');
+            return;
+        }
+        if ($reason === '') {
+            $this->session->set_flashdata('error', 'A reason is required to archive a patient.');
+            redirect('patient');
+            return;
+        }
+
+        $this->db->where(array('patient_id' => $id, 'is_active' => 1));
+        $this->db->where('end_date >=', date('Y-m-d'));
+        if ($this->db->count_all_results('nurse_assignments') > 0) {
+            $this->session->set_flashdata('error', html_entity_decode($patient->name) . ' still has a current or upcoming bedside nurse placement. End or remove the nurse assignment(s) before archiving.');
+            redirect('patient');
+            return;
+        }
+
+        $this->patient_model->updatePatient($id, array(
+            'is_active'      => 0,
+            'deleted_at'     => date('Y-m-d H:i:s'),
+            'deleted_reason' => $reason,
+        ));
+        if (!empty($patient->ion_user_id)) {
+            $this->ion_auth->deactivate($patient->ion_user_id);
+        }
+
+        audit_log(array(
+            'module'      => 'patient',
+            'record_type' => 'patient',
+            'record_id'   => $id,
+            'action'      => 'Patient archived (soft delete)',
+            'old_value'   => $patient->name,
+            'reason'      => $reason,
+        ));
+
+        $this->session->set_flashdata('success', 'Patient archived. Their history is preserved and they can be restored from "Show archived".');
+        redirect('patient');
+    }
+
+    // Restore an archived patient
+    function restore()
+    {
+        if (!$this->ion_auth->in_group('admin')) {
+            redirect('home/permission');
+            return;
+        }
+        $this->load->helper('audit');
+        $id = $this->input->get('id');
+        $patient = $this->patient_model->getPatientById($id);
+        if (empty($patient) || $patient->is_active == 1) {
+            redirect('patient');
+            return;
+        }
+
+        $this->patient_model->updatePatient($id, array(
+            'is_active'      => 1,
+            'deleted_at'     => null,
+            'deleted_reason' => null,
+        ));
+        if (!empty($patient->ion_user_id)) {
+            $this->ion_auth->activate($patient->ion_user_id);
+        }
+
+        audit_log(array(
+            'module'      => 'patient',
+            'record_type' => 'patient',
+            'record_id'   => $id,
+            'action'      => 'Patient restored',
+            'new_value'   => $patient->name,
+        ));
+
+        $this->session->set_flashdata('success', 'Patient restored.');
         redirect('patient');
     }
 
@@ -1309,10 +1459,17 @@ class Patient extends MX_Controller
             "0" => "id",
             "1" => "name",
             "2" => "phone",
+            "3" => "status",
+            "4" => "bedside",
+            "5" => "assigned_nurse",
         );
         $values = $this->settings_model->getColumnOrder($order, $columns_valid);
         $dir = $values[0];
         $order = $values[1];
+
+        $archived = $this->ion_auth->in_group('admin') && $this->input->post('archived') == '1';
+        $this->patient_model->show_archived = $archived;
+        $bedside = $this->input->post('bedside');
 
         if ($limit == -1) {
             if (!empty($search)) {
@@ -1324,17 +1481,19 @@ class Patient extends MX_Controller
             if (!empty($search)) {
                 $data['patients'] = $this->patient_model->getPatientByLimitBySearch($limit, $start, $search, $order, $dir);
             } else {
-                $bedside = $this->input->post('bedside');
-
-                if (!empty($bedside)) {
-                    $this->db->where('bedside', $bedside);
-                }
                 $data['patients'] = $this->patient_model->getPatientByLimit($limit, $start, $order, $dir, $bedside);
             }
         }
-        //  $data['patients'] = $this->patient_model->getPatient();
+        $records_total = $this->patient_model->countPatients();
+        $records_filtered = $this->patient_model->countPatients($search, empty($search) ? $bedside : null);
+
+        $nurses_by_patient = $this->_current_nurses_by_patient(array_map(function ($p) {
+            return $p->id;
+        }, $data['patients']));
 
         foreach ($data['patients'] as $patient) {
+            $assigned_nurses = $this->_assigned_nurses_cell(isset($nurses_by_patient[$patient->id]) ? $nurses_by_patient[$patient->id] : array());
+
             if ($patient->status == 'Active') {
                 $status = '<span class="label label-success">Active</span>';
             } elseif ($patient->status == 'Discharged') {
@@ -1353,14 +1512,25 @@ class Patient extends MX_Controller
                 $options1 = ' <a type="button" class="btn editbutton" title="' . lang('edit') . '" data-toggle = "modal" data-id="' . $patient->id . '"><i class="fa fa-edit"> </i> ' . lang('edit') . '</a>';
             }
 
-            $options2 = '<a class="btn detailsbutton" title="' . lang('info') . '" style="color: #fff;" href="patient/patientDetails?id=' . $patient->id . '"><i class="fa fa-info"></i> ' . lang('info') . '</a>';
+            $options2 = '<a class="btn detailsbutton" title="Care team, recovery journal &amp; feedback" style="color: #fff;" href="patient/patientDetails?id=' . $patient->id . '"><i class="fa fa-notes-medical"></i> Details</a>';
 
             $options3 = '<a class="btn green" title="' . lang('history') . '" style="color: #fff;" href="patient/medicalHistory?id=' . $patient->id . '"><i class="fa fa-stethoscope"></i> ' . lang('history') . '</a>';
 
             $options4 = '<a class="btn invoicebutton" title="' . lang('payment') . '" style="color: #fff;" href="finance/patientPaymentHistory?patient=' . $patient->id . '"><i class="fa fa-money-bill-alt"></i> ' . lang('payment') . '</a>';
 
-            if ($this->ion_auth->in_group(array('admin', 'Accountant', 'Receptionist', 'Laboratorist', 'Nurse', 'Doctor'))) {
-                $options5 = '<a class="btn delete_button" title="' . lang('delete') . '" href="patient/delete?id=' . $patient->id . '" onclick="return confirm(\'Are you sure you want to delete this item?\');"><i class="fa fa-trash"></i> ' . lang('delete') . '</a>';
+            $options8 = '';
+            if ($this->ion_auth->in_group('admin')) {
+                $options8 = '<a type="button" class="btn btn-success assignnursebutton" title="Assign a bedside nurse" data-id="' . $patient->id . '" data-name="' . html_escape($patient->name) . '"><i class="fa fa-user-plus"></i> Assign Nurse</a>';
+            }
+
+            $options5 = '';
+            if ($this->ion_auth->in_group('admin')) {
+                if ($archived) {
+                    $options5 = '<a class="btn btn-success" title="Restore patient" href="patient/restore?id=' . $patient->id . '" onclick="return confirm(\'Restore this patient?\');"><i class="fa fa-undo"></i> Restore</a>';
+                    $options8 = '';
+                } else {
+                    $options5 = '<a class="btn delete_button" title="Archive patient (history is preserved)" href="javascript:void(0);" onclick="archivePatient(' . $patient->id . ');"><i class="fa fa-archive"></i> Archive</a>';
+                }
             }
 
             $options6 = ' <a type="button" class="btn detailsbutton inffo" title="' . lang('info') . '" data-toggle = "modal" data-id="' . $patient->id . '"><i class="fa fa-info"> </i> ' . lang('info') . '</a>';
@@ -1380,9 +1550,9 @@ class Patient extends MX_Controller
                     $patient->phone,
                     $status,
                     $bedside,
+                    $assigned_nurses,
                     $this->settings_model->getSettings()->currency . $this->patient_model->getDueBalanceByPatientId($patient->id),
-                    $options1 . ' ' . $options6 . ' ' . $options3 . ' ' . $options4 . ' ' . $options5,
-                    //  $options2
+                    $options1 . ' ' . $options6 . ' ' . $options2 . ' ' . $options8 . ' ' . $options3 . ' ' . $options4 . ' ' . $options5,
                 );
             }
 
@@ -1393,9 +1563,9 @@ class Patient extends MX_Controller
                     $patient->phone,
                     $status,
                     $bedside,
+                    $assigned_nurses,
                     $this->settings_model->getSettings()->currency . $this->patient_model->getDueBalanceByPatientId($patient->id),
-                    $options1 . ' ' . $options6 . ' ' . $options4,
-                    //  $options2
+                    $options1 . ' ' . $options6 . ' ' . $options2 . ' ' . $options4,
                 );
             }
 
@@ -1406,8 +1576,8 @@ class Patient extends MX_Controller
                     $patient->phone,
                     $status,
                     $bedside,
-                    $options1 . ' ' . $options6 . ' ' . $options3,
-                    //  $options2
+                    $assigned_nurses,
+                    $options1 . ' ' . $options6 . ' ' . $options2 . ' ' . $options3,
                 );
             }
         }
@@ -1416,14 +1586,14 @@ class Patient extends MX_Controller
         if (!empty($data['patients'])) {
             $output = array(
                 "draw" => intval($requestData['draw']),
-                "recordsTotal" => $this->db->get('patient')->num_rows(),
-                "recordsFiltered" => $this->db->get('patient')->num_rows(),
+                "recordsTotal" => $records_total,
+                "recordsFiltered" => $records_filtered,
                 "data" => $info
             );
         } else {
             $output = array(
-                // "draw" => 1,
-                "recordsTotal" => 0,
+                "draw" => intval($requestData['draw']),
+                "recordsTotal" => $records_total,
                 "recordsFiltered" => 0,
                 "data" => []
             );
@@ -1432,8 +1602,51 @@ class Patient extends MX_Controller
         echo json_encode($output);
     }
 
+    // Current and upcoming (not yet ended) active nurse assignments, grouped by patient id
+    private function _current_nurses_by_patient($patient_ids)
+    {
+        if (empty($patient_ids)) {
+            return array();
+        }
+        $this->db->select('nurse_assignments.patient_id, nurse_assignments.assignment_role, nurse_assignments.start_date, nurse_assignments.end_date, nurse.name as nurse_name');
+        $this->db->from('nurse_assignments');
+        $this->db->join('nurse', 'nurse.id = nurse_assignments.nurse_id', 'left');
+        $this->db->where_in('nurse_assignments.patient_id', $patient_ids);
+        $this->db->where('nurse_assignments.is_active', 1);
+        $this->db->where('nurse_assignments.end_date >=', date('Y-m-d'));
+        $this->db->order_by("FIELD(nurse_assignments.assignment_role,'Primary','Additional')", '', false);
+        $this->db->order_by('nurse_assignments.start_date', 'ASC');
+
+        $grouped = array();
+        foreach ($this->db->get()->result() as $row) {
+            $grouped[$row->patient_id][] = $row;
+        }
+        return $grouped;
+    }
+
+    private function _assigned_nurses_cell($rows)
+    {
+        if (empty($rows)) {
+            return '<span class="text-muted">—</span>';
+        }
+        $today = date('Y-m-d');
+        $parts = array();
+        foreach ($rows as $row) {
+            $badge = $row->assignment_role == 'Additional'
+                ? '<span class="label label-info" title="Additional / Alternate">A</span>'
+                : '<span class="label label-success" title="Primary">P</span>';
+            $when = $row->start_date > $today
+                ? ' <small class="text-muted">(from ' . date('d M', strtotime($row->start_date)) . ')</small>'
+                : ' <small class="text-muted">(until ' . date('d M', strtotime($row->end_date)) . ')</small>';
+            $parts[] = $badge . ' ' . html_escape($row->nurse_name) . $when;
+        }
+        return implode('<br>', $parts);
+    }
+
     function getPatientPayments()
     {
+        // Archived patients may still have balances to settle
+        $this->patient_model->show_archived = null;
         $requestData = $_REQUEST;
         $start = $requestData['start'];
         $limit = $requestData['length'];
@@ -1476,10 +1689,6 @@ class Patient extends MX_Controller
             $options3 = '<a class="btn green" title="' . lang('history') . '" style="color: #fff;" href="patient/medicalHistory?id=' . $patient->id . '"><i class="fa fa-stethoscope"></i> ' . lang('history') . '</a>';
 
             $options4 = '<a class="btn btn-xs green" title="' . lang('payment') . ' ' . lang('history') . '" style="color: #fff;" href="finance/patientPaymentHistory?patient=' . $patient->id . '"><i class="fa fa-money-bill-alt"></i> ' . lang('payment') . ' ' . lang('history') . '</a>';
-
-            if ($this->ion_auth->in_group(array('admin', 'Accountant', 'Receptionist', 'Laboratorist', 'Nurse', 'Doctor'))) {
-                $options5 = '<a class="btn delete_button" title="' . lang('delete') . '" href="patient/delete?id=' . $patient->id . '" onclick="return confirm(\'Are you sure you want to delete this item?\');"><i class="fa fa-trash"></i> ' . lang('delete') . '</a>';
-            }
 
             $due = $this->settings_model->getSettings()->currency . $this->patient_model->getDueBalanceByPatientId($patient->id);
 

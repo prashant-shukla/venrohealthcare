@@ -12,11 +12,49 @@ class Patient_model extends CI_model
         $this->load->database();
     }
 
+    // The patient list and patient pickers show active patients; true = archived (soft deleted) only, null = all
+    public $show_archived = false;
+
+    private function _scope()
+    {
+        if ($this->show_archived !== null) {
+            $this->db->where('patient.is_active', $this->show_archived ? 0 : 1);
+        }
+    }
+
+    // Ordering for the patient list. 'assigned_nurse' sorts by the name of the current/upcoming
+    // bedside nurse; patients without a nurse always come last.
+    private function _order($order, $dir)
+    {
+        $dir = strtolower($dir) === 'desc' ? 'DESC' : 'ASC';
+        if ($order === 'assigned_nurse') {
+            $nurse = "(SELECT MIN(TRIM(nurse.name)) FROM nurse_assignments"
+                . " JOIN nurse ON nurse.id = nurse_assignments.nurse_id"
+                . " WHERE nurse_assignments.patient_id = patient.id AND nurse_assignments.is_active = 1"
+                . " AND (nurse_assignments.end_date >= CURDATE() OR nurse_assignments.end_date IS NULL))";
+            $this->db->order_by($nurse . ' IS NULL', 'ASC', false);
+            $this->db->order_by($nurse, $dir, false);
+            $this->db->order_by('patient.id', 'DESC');
+        } elseif ($order === 'status' || $order === 'bedside') {
+            // ENUM columns sort by declaration index unless cast to text
+            $this->db->order_by('CAST(patient.' . $order . ' AS CHAR)', $dir, false);
+            $this->db->order_by('patient.id', 'DESC');
+        } elseif ($order === 'name') {
+            $this->db->order_by('TRIM(patient.name)', $dir, false);
+            $this->db->order_by('patient.id', 'DESC');
+        } elseif ($order != null) {
+            $this->db->order_by($order, $dir);
+        } else {
+            $this->db->order_by('id', 'desc');
+        }
+    }
+
     function insertPatient($data)
     {
         $this->db->insert('patient', $data);
     }
 
+    // All patients, including archived ones (used to look up names on historical records)
     function getPatient()
     {
         $this->db->order_by('id', 'desc');
@@ -24,26 +62,39 @@ class Patient_model extends CI_model
         return $query->result();
     }
 
+    function countPatients($search = null, $bedside = null)
+    {
+        $this->_scope();
+        if (!empty($bedside)) {
+            $this->db->where('bedside', $bedside);
+        }
+        if (!empty($search)) {
+            $this->db->group_start();
+            $this->db->like('id', $search);
+            $this->db->or_like('name', $search);
+            $this->db->or_like('phone', $search);
+            $this->db->or_like('address', $search);
+            $this->db->group_end();
+        }
+        return $this->db->count_all_results('patient');
+    }
+
     function getPatientWithoutSearch($order, $dir)
     {
-        if ($order != null) {
-            $this->db->order_by($order, $dir);
-        } else {
-            $this->db->order_by('id', 'desc');
-        }
+        $this->_scope();
+        $this->_order($order, $dir);
         $query = $this->db->get('patient');
         return $query->result();
     }
 
     function getPatientBySearch($search, $order, $dir)
     {
-        if ($order != null) {
-            $this->db->order_by($order, $dir);
-        } else {
-            $this->db->order_by('id', 'desc');
-        }
+        $this->_scope();
+        $this->_order($order, $dir);
+        $this->db->group_start();
         $this->db->like('id', $search);
         $this->db->or_like('name', $search);
+        $this->db->group_end();
         $query = $this->db->get('patient');
         return $query->result();
     }
@@ -61,18 +112,15 @@ class Patient_model extends CI_model
 
     function getPatientByLimitBySearch($limit, $start, $search, $order, $dir)
     {
-
+        $this->_scope();
+        $this->db->group_start();
         $this->db->like('id', $search);
-
-        if ($order != null) {
-            $this->db->order_by($order, $dir);
-        } else {
-            $this->db->order_by('id', 'desc');
-        }
-
         $this->db->or_like('name', $search);
         $this->db->or_like('phone', $search);
         $this->db->or_like('address', $search);
+        $this->db->group_end();
+
+        $this->_order($order, $dir);
 
         $this->db->limit($limit, $start);
         $query = $this->db->get('patient');
@@ -378,14 +426,16 @@ class Patient_model extends CI_model
     {
         if (!empty($searchTerm)) {
             $this->db->select('*');
-            $this->db->where("name like '%" . $searchTerm . "%' ");
-            $this->db->or_where("id like '%" . $searchTerm . "%' ");
+            $this->_scope();
+            $this->db->group_start();
+            $this->db->like('name', $searchTerm);
+            $this->db->or_like('id', $searchTerm);
+            $this->db->group_end();
             $fetched_records = $this->db->get('patient');
             $users = $fetched_records->result_array();
         } else {
             $this->db->select('*');
-            // $this->db->where("name like '%".$searchTerm."%' ");
-            //  $this->db->or_where("id like '%".$searchTerm."%' ");
+            $this->_scope();
             $this->db->limit(10);
             $fetched_records = $this->db->get('patient');
             $users = $fetched_records->result_array();
@@ -402,14 +452,16 @@ class Patient_model extends CI_model
     {
         if (!empty($searchTerm)) {
             $this->db->select('*');
-            $this->db->where("name like '%" . $searchTerm . "%' ");
-            $this->db->or_where("id like '%" . $searchTerm . "%' ");
+            $this->_scope();
+            $this->db->group_start();
+            $this->db->like('name', $searchTerm);
+            $this->db->or_like('id', $searchTerm);
+            $this->db->group_end();
             $fetched_records = $this->db->get('patient');
             $users = $fetched_records->result_array();
         } else {
             $this->db->select('*');
-            // $this->db->where("name like '%".$searchTerm."%' ");
-            //  $this->db->or_where("id like '%".$searchTerm."%' ");
+            $this->_scope();
             $this->db->limit(10);
             $fetched_records = $this->db->get('patient');
             $users = $fetched_records->result_array();
@@ -427,16 +479,13 @@ class Patient_model extends CI_model
 
     function getPatientByLimit($limit, $start, $order, $dir, $bedside = null)
     {
+        $this->_scope();
 
         if (!empty($bedside)) {
             $this->db->where('bedside', $bedside);
         }
 
-        if ($order != null) {
-            $this->db->order_by($order, $dir);
-        } else {
-            $this->db->order_by('id', 'desc');
-        }
+        $this->_order($order, $dir);
 
         $this->db->limit($limit, $start);
         $query = $this->db->get('patient');

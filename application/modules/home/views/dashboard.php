@@ -504,6 +504,8 @@
                             </a>
                             <ul class="sub">
                                 <li><a href="nurse"><i class="fa fa-user"></i><?php echo lang('nurse'); ?></a></li>
+                                <li><a href="nurse/assignments"><i class="fa fa-user-nurse"></i>Assigned Nurses</a></li>
+                                <li><a href="feedback"><i class="fa fa-comments"></i>Bedside Feedback</a></li>
 
                                 <li><a href="pharmacist"><i class="fa fa-user"></i><?php echo lang('pharmacist'); ?></a></li>
                                 <li><a href="laboratorist"><i class="fa fa-user"></i><?php echo lang('laboratorist'); ?></a></li>

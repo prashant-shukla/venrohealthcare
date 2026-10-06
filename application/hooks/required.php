@@ -22,7 +22,10 @@ function required() {
 
     $CI->settings = $CI->db->get('settings')->row();
     
-    if ($RTR->class != "frontend" && $RTR->class != "auth") {
+    // Customers complete feedback through an emailed/texted link without logging in
+    $public_feedback = $RTR->class == "feedback" && in_array($RTR->method, array('form', 'submit'), true);
+
+    if ($RTR->class != "frontend" && $RTR->class != "auth" && !$public_feedback) {
         if (!$CI->ion_auth->logged_in()) {
             redirect('auth/login');
         }

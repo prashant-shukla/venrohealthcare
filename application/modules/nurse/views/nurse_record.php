@@ -104,6 +104,7 @@ $cur = isset($this->currency) ? $this->currency : '';
 .nr-badge.green { background:#e6f6ee; color:#1f9d55; }
 .nr-badge.grey  { background:#eef1f5; color:#64748b; }
 .nr-badge.blue  { background:#e8f1fe; color:#2c7be5; }
+.nr-badge.amber { background:#fdf1e3; color:#d9770b; }
 
 /* Timeline */
 .nr-tl { position:relative; margin:0; padding:4px 0 0 4px; }
@@ -211,17 +212,45 @@ $cur = isset($this->currency) ? $this->currency : '';
                   <a class="nr-cert" href="<?php echo base_url($nurse->nurse_license_pdf); ?>" target="_blank"><i class="fa fa-certificate"></i> View Licence</a>
                 <?php } ?>
                 <?php if (!empty($nurse->nurse_profile_pdf)) { ?>
-                  <a class="nr-cert" href="<?php echo base_url($nurse->nurse_profile_pdf); ?>" target="_blank"><i class="fa fa-file-pdf-o"></i> Profile Document</a>
+                  <a class="nr-cert" href="<?php echo base_url($nurse->nurse_profile_pdf); ?>" target="_blank"><i class="fa fa-file-pdf"></i> Profile Document</a>
                 <?php } ?>
                 <div style="clear:both"></div>
-                <div style="margin-top:8px; font-size:12px; color:#94a3b8;">
-                  Licence expiry:
-                  <strong style="color:<?php echo $lic_state=='exp'?'#e3342f':($lic_state=='soon'?'#e8830c':($lic_state=='ok'?'#1f9d55':'#94a3b8')); ?>">
-                    <?php echo $lic_state=='none' ? 'Not set' : date('d M Y', strtotime($exp)) . ' (' . $lic_label . ')'; ?>
-                  </strong>
-                </div>
               <?php } else { ?>
-                <div class="nr-empty"><i class="fa fa-folder-open-o"></i> No certificates on file.</div>
+                <div class="nr-empty" style="padding:12px 10px;"><i class="fa fa-folder-open"></i> No certificates on file.</div>
+              <?php } ?>
+              <div style="margin-top:8px; font-size:12px; color:#94a3b8;">
+                Licence expiry:
+                <strong style="color:<?php echo $lic_state=='exp'?'#e3342f':($lic_state=='soon'?'#e8830c':($lic_state=='ok'?'#1f9d55':'#94a3b8')); ?>">
+                  <?php echo $lic_state=='none' ? 'Not set' : date('d M Y', strtotime($exp)) . ' (' . $lic_label . ')'; ?>
+                </strong>
+              </div>
+
+              <?php if (!empty($certificates)) { ?>
+                <div style="margin-top:16px;font-size:12px;font-weight:700;color:#475569;">All uploaded documents</div>
+                <table class="nr-table" style="margin-top:6px;">
+                  <thead><tr><th>Document</th><th>Expiry</th><th>Uploaded</th><th></th></tr></thead>
+                  <tbody>
+                    <?php foreach ($certificates as $c) {
+                      $c_state = '';
+                      if (!empty($c->expiry_date)) {
+                        $c_state = $c->expiry_date < $today ? 'exp' : ($c->expiry_date <= $three ? 'soon' : 'ok');
+                      } ?>
+                      <tr>
+                        <td><?php echo $c->cert_type == 'Licence' ? 'Licence' : 'Profile'; ?>
+                          <?php echo $c->is_current ? '<span class="nr-badge green">Current</span>' : '<span class="nr-badge grey">Previous</span>'; ?></td>
+                        <td>
+                          <?php if ($c_state) { ?>
+                            <span style="color:<?php echo $c_state=='exp'?'#e3342f':($c_state=='soon'?'#e8830c':'#1f9d55'); ?>;font-weight:600;">
+                              <?php echo date('d M Y', strtotime($c->expiry_date)); ?><?php echo $c_state=='exp' ? ' (Expired)' : ($c_state=='soon' ? ' (Expiring soon)' : ''); ?>
+                            </span>
+                          <?php } else { echo '—'; } ?>
+                        </td>
+                        <td><?php echo date('d M Y', strtotime($c->uploaded_at)); ?><?php echo !empty($c->uploaded_by_name) ? '<br><small>by ' . html_escape($c->uploaded_by_name) . '</small>' : ''; ?></td>
+                        <td><a href="<?php echo base_url($c->file_path); ?>" target="_blank">View</a></td>
+                      </tr>
+                    <?php } ?>
+                  </tbody>
+                </table>
               <?php } ?>
             </div>
           </div>
@@ -252,6 +281,10 @@ $cur = isset($this->currency) ? $this->currency : '';
                     <td>
                       <?php if (isset($a->is_active) && $a->is_active == 0) { ?>
                         <span class="nr-badge grey">Removed</span>
+                      <?php } elseif (!empty($a->end_date) && $a->end_date < $today) { ?>
+                        <span class="nr-badge grey">Completed</span>
+                      <?php } elseif (!empty($a->start_date) && $a->start_date > $today) { ?>
+                        <span class="nr-badge amber">Upcoming</span>
                       <?php } else { ?>
                         <span class="nr-badge green">Active</span>
                       <?php } ?>
@@ -274,12 +307,17 @@ $cur = isset($this->currency) ? $this->currency : '';
             <div class="nr-card-b" style="padding:0;">
               <?php if (!empty($payments)) { ?>
                 <table class="nr-table">
-                  <thead><tr><th>Date</th><th>Amount</th><th>Note</th></tr></thead>
+                  <thead><tr><th>Date</th><th>Amount</th><th>For</th><th>Note</th></tr></thead>
                   <tbody>
                     <?php foreach ($payments as $p) { ?>
                       <tr>
                         <td><?php echo !empty($p->payment_date) ? date('d M Y', strtotime($p->payment_date)) : '—'; ?></td>
                         <td style="font-weight:700;color:#1f9d55;"><?php echo $cur; ?> <?php echo number_format($p->amount, 2); ?></td>
+                        <td>
+                          <?php echo !empty($p->patient_name) ? html_escape($p->patient_name) : 'General'; ?>
+                          <?php if (!empty($p->period_from)) { ?><br><small style="color:#94a3b8;"><?php echo date('d M', strtotime($p->period_from)) . ' – ' . date('d M Y', strtotime($p->period_to)); ?></small><?php } ?>
+                          <?php if (!empty($p->is_advance)) { ?><br><span class="nr-badge amber">Advance</span><?php } ?>
+                        </td>
                         <td><?php echo html_escape($p->note); ?></td>
                       </tr>
                     <?php } ?>
@@ -320,6 +358,36 @@ $cur = isset($this->currency) ? $this->currency : '';
               <?php } ?>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- ===== FEEDBACK ===== -->
+      <div class="nr-card">
+        <div class="nr-card-h"><i class="fa fa-comments"></i> Feedback
+          <a href="<?php echo base_url('feedback?nurse_id=' . $nurse->id); ?>" style="margin-left:auto;font-size:12px;font-weight:600;">Record / request feedback</a>
+        </div>
+        <div class="nr-card-b" style="padding:0;">
+          <?php if (!empty($feedback)) { ?>
+            <table class="nr-table">
+              <thead><tr><th>Date</th><th>Patient / Customer</th><th>Type</th><th>Rating</th><th>Comments</th><th>Source</th></tr></thead>
+              <tbody>
+                <?php foreach ($feedback as $f) { ?>
+                  <tr>
+                    <td><?php echo date('d M Y', strtotime(!empty($f->submitted_at) ? $f->submitted_at : $f->created_at)); ?></td>
+                    <td><?php echo html_escape(!empty($f->patient_name) ? $f->patient_name : $f->customer_name); ?></td>
+                    <td><?php echo $f->feedback_type == 'Business' ? 'Business / Service' : 'Nurse'; ?></td>
+                    <td><?php echo $f->rating ? (int) $f->rating . '/5' : '—'; ?></td>
+                    <td><?php echo nl2br(html_escape((string) $f->comments)); ?></td>
+                    <td><?php echo $f->source == 'Customer'
+                        ? '<span class="nr-badge green">Submitted by customer</span>'
+                        : '<span class="nr-badge grey">Manually recorded</span>'; ?></td>
+                  </tr>
+                <?php } ?>
+              </tbody>
+            </table>
+          <?php } else { ?>
+            <div class="nr-empty"><i class="fa fa-comments"></i> No feedback received yet.</div>
+          <?php } ?>
         </div>
       </div>
 

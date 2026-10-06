@@ -180,7 +180,7 @@
             <?php } ?>
             <?php if (!empty($nurse->nurse_profile_pdf)) { ?>
                 <a href="<?php echo base_url($nurse->nurse_profile_pdf); ?>" target="_blank" class="nl-doc">
-                    <i class="fa fa-file-pdf-o"></i> Profile
+                    <i class="fa fa-file-pdf"></i> Profile
                 </a>
             <?php } ?>
             <?php if (empty($nurse->nurse_license_pdf) && empty($nurse->nurse_profile_pdf)) { ?>
@@ -214,6 +214,10 @@
                                             <a href="<?php echo base_url('nurse/payment/' . $nurse->id); ?>"
                                                 class="btn btn-warning btn-xs">
                                                 <i class="fa fa-money"></i> Payment
+                                            </a>
+                                            <a href="<?php echo base_url('nurse/unpaid/' . $nurse->id); ?>"
+                                                class="btn btn-default btn-xs" title="Days / weeks not yet paid">
+                                                <i class="fa fa-calendar-times"></i> Unpaid
                                             </a>
                                         <?php } ?>
                                     </td>
@@ -414,6 +418,24 @@
 <!-- Edit Event Modal-->
 
 <script>
+    // Deactivate (soft delete) a nurse: confirm + capture a reason,
+    // then submit to the controller which preserves the historical record.
+    function deactivateNurse(id) {
+        if (!confirm('Deactivate this nurse? Their historical records will be preserved.')) {
+            return;
+        }
+        var reason = '';
+        while (reason.trim() === '') {
+            reason = prompt('Reason for deactivation (required, recorded in the audit trail):', '');
+            if (reason === null) {
+                return; // cancelled
+            }
+        }
+        window.location.href = 'nurse/delete?id=' + id + '&reason=' + encodeURIComponent(reason);
+    }
+</script>
+<script src="common/js/codearistos.min.js"></script>
+<script>
     // Instant client-side check: only allow PDF files for certificate/licence uploads.
     // Delegated so it also works on the AJAX-loaded edit form.
     $(document).on('change', 'input.pdf-only', function () {
@@ -427,22 +449,6 @@
         }
     });
 </script>
-
-<script>
-    // Deactivate (soft delete) a nurse: confirm + capture a reason,
-    // then submit to the controller which preserves the historical record.
-    function deactivateNurse(id) {
-        if (!confirm('Deactivate this nurse? Their historical records will be preserved.')) {
-            return;
-        }
-        var reason = prompt('Reason for deactivation (recorded in the audit trail):', '');
-        if (reason === null) {
-            return; // cancelled
-        }
-        window.location.href = 'nurse/delete?id=' + id + '&reason=' + encodeURIComponent(reason);
-    }
-</script>
-<script src="common/js/codearistos.min.js"></script>
 <script type="text/javascript">
     $(document).ready(function() {
         $(".editbutton").click(function(e) {

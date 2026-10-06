@@ -9,6 +9,14 @@
 
                 <?php echo lang('patient'); ?> <?php echo lang('database'); ?>
 
+                <?php if ($this->ion_auth->in_group('admin')) { ?>
+                    <div class="col-md-2 pull-right" style="margin-top:-5px;">
+                        <select id="archivedFilter" class="form-control" title="Archived patients keep all their history and can be restored">
+                            <option value="0">Active patients</option>
+                            <option value="1">Show archived</option>
+                        </select>
+                    </div>
+                <?php } ?>
                 <div class="col-md-3 pull-right" style="margin-top:-5px;">
                     <select id="bedsideFilter" class="form-control">
                         <option value="">Bedside Nursing Program</option>
@@ -29,6 +37,16 @@
             </header>
             <div class="panel-body">
 
+                <?php if ($this->session->flashdata('success')) { ?>
+                    <div class="alert alert-success"><?php echo html_escape($this->session->flashdata('success')); ?></div>
+                <?php } ?>
+                <?php if ($this->session->flashdata('warning')) { ?>
+                    <div class="alert alert-warning"><?php echo html_escape($this->session->flashdata('warning')); ?></div>
+                <?php } ?>
+                <?php if ($this->session->flashdata('error')) { ?>
+                    <div class="alert alert-danger"><?php echo html_escape($this->session->flashdata('error')); ?></div>
+                <?php } ?>
+
                 <div class="adv-table editable-table ">
 
                     <div class="space15"></div>
@@ -40,10 +58,11 @@
                                 <th><?php echo lang('phone'); ?></th>
                                 <th>Patient Status</th>
                                 <th>Bedside Nursing Program</th>
+                                <th>Assigned Nurse(s)</th>
                                 <?php if ($this->ion_auth->in_group(array('admin', 'Accountant', 'Receptionist'))) { ?>
-                                    <th><?php echo lang('due_balance'); ?></th>
+                                    <th class="no-sort"><?php echo lang('due_balance'); ?></th>
                                 <?php } ?>
-                                <th class="no-print"><?php echo lang('options'); ?></th>
+                                <th class="no-print no-sort"><?php echo lang('options'); ?></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -75,7 +94,95 @@
 <!--main content end-->
 <!--footer start-->
 
+<?php if ($this->ion_auth->in_group('admin')) { ?>
+<!-- Assign Nurse Modal -->
+<div class="modal fade" id="assignNurseModal" tabindex="-1" role="dialog" aria-hidden="true" style="display: none;">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-hidden="true">×</button>
+                <h4 class="modal-title">Assign Nurse to <span id="assignPatientName"></span></h4>
+            </div>
+            <div class="modal-body row">
+                <form role="form" action="nurse/saveAssign" class="clearfix" method="post">
+                    <input type="hidden" name="redirect_to" value="patient">
+                    <input type="hidden" name="patient_id" id="assignPatientId">
 
+                    <div class="form-group col-md-6">
+                        <label>Nurse</label>
+                        <select class="form-control" name="nurse_id" required>
+                            <option value="">Select Nurse</option>
+                            <?php foreach ($nurses as $n) { ?>
+                                <option value="<?php echo $n->id; ?>"><?php echo html_escape($n->name); ?><?php echo !empty($n->status) ? ' — ' . html_escape($n->status) : ''; ?></option>
+                            <?php } ?>
+                        </select>
+                    </div>
+                    <div class="form-group col-md-6">
+                        <label>Assignment Role</label>
+                        <select class="form-control" name="assignment_role">
+                            <option value="Primary">Primary (Day) Nurse</option>
+                            <option value="Additional">Additional / Alternate Nurse</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group col-md-6">
+                        <label>Start Date</label>
+                        <input type="date" class="form-control" name="start_date" required>
+                    </div>
+                    <div class="form-group col-md-6">
+                        <label>End Date</label>
+                        <input type="date" class="form-control" name="end_date" required>
+                    </div>
+
+                    <div class="form-group col-md-6">
+                        <label>Billing Type</label>
+                        <select class="form-control" name="payment_term" id="assignPaymentTerm">
+                            <option value="Day">Daily</option>
+                            <option value="Week">Weekly</option>
+                            <option value="Month">Monthly</option>
+                        </select>
+                    </div>
+                    <div class="form-group col-md-6 assign-fee" data-term="Day">
+                        <label>Per Day amount (<?php echo $this->currency; ?>)</label>
+                        <input type="number" step="0.01" min="0" class="form-control" name="per_day_fee">
+                    </div>
+                    <div class="form-group col-md-6 assign-fee" data-term="Week" style="display:none;">
+                        <label>Per Week amount (<?php echo $this->currency; ?>)</label>
+                        <input type="number" step="0.01" min="0" class="form-control" name="per_week_fee">
+                    </div>
+                    <div class="form-group col-md-6 assign-fee" data-term="Month" style="display:none;">
+                        <label>Per Month amount (<?php echo $this->currency; ?>)</label>
+                        <input type="number" step="0.01" min="0" class="form-control" name="per_month_fee">
+                    </div>
+
+                    <div class="form-group col-md-6">
+                        <label>Commute Frequency (optional)</label>
+                        <select class="form-control" name="transport_frequency" id="assignTransportFrequency">
+                            <option value="">-- None --</option>
+                            <option value="Daily">Daily</option>
+                            <option value="Weekly">Weekly</option>
+                            <option value="Monthly">Monthly</option>
+                            <option value="Flexible">Flexible Commute</option>
+                        </select>
+                    </div>
+                    <div class="form-group col-md-6">
+                        <label>Transport Charge (<?php echo $this->currency; ?>)</label>
+                        <input type="number" step="0.01" min="0" class="form-control" name="transport_charge">
+                    </div>
+                    <div class="form-group col-md-12" id="assignTransportNote" style="display:none;">
+                        <label>Agreed Arrangement (Flexible Commute)</label>
+                        <textarea class="form-control" name="transport_note" rows="2"></textarea>
+                    </div>
+
+                    <div class="form-group col-md-12">
+                        <button type="submit" class="btn btn-success"><i class="fa fa-check"></i> Assign Nurse</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+<?php } ?>
 
 
 
@@ -691,6 +798,7 @@
                 type: "POST",
                 data: function(d) {
                     d.bedside = $('#bedsideFilter').val();
+                    d.archived = $('#archivedFilter').val() || '0';
                 }
             },
 
@@ -726,6 +834,11 @@
                 [0, "desc"]
             ],
 
+            columnDefs: [{
+                orderable: false,
+                targets: 'no-sort'
+            }],
+
             language: {
                 lengthMenu: "_MENU_",
                 search: "_INPUT_",
@@ -733,8 +846,8 @@
             }
         });
 
-        // bedside filter change
-        $('#bedsideFilter').on('change', function() {
+        // bedside / archived filter change
+        $('#bedsideFilter, #archivedFilter').on('change', function() {
             table.ajax.reload();
         });
 
@@ -803,4 +916,38 @@
     $(document).ready(function() {
         $(".flashmessage").delay(3000).fadeOut(100);
     });
+
+    // Archive (soft delete) a patient: confirm + mandatory reason for the audit trail
+    function archivePatient(id) {
+        if (!confirm('Archive this patient? Their record and all history (nurse assignments, billing, journal, invoices) are preserved and they can be restored later.')) {
+            return;
+        }
+        var reason = '';
+        while (reason.trim() === '') {
+            reason = prompt('Reason for archiving (required, recorded in the audit trail):', '');
+            if (reason === null) {
+                return;
+            }
+        }
+        window.location.href = 'patient/delete?id=' + id + '&reason=' + encodeURIComponent(reason);
+    }
 </script>
+
+<?php if ($this->ion_auth->in_group('admin')) { ?>
+<script>
+    $(document).on('click', '.assignnursebutton', function () {
+        $('#assignPatientId').val($(this).data('id'));
+        $('#assignPatientName').text($(this).data('name'));
+        $('#assignNurseModal').modal('show');
+    });
+    $(document).on('change', '#assignPaymentTerm', function () {
+        var term = this.value;
+        $('.assign-fee').each(function () {
+            $(this).toggle($(this).data('term') === term);
+        });
+    });
+    $(document).on('change', '#assignTransportFrequency', function () {
+        $('#assignTransportNote').toggle(this.value === 'Flexible');
+    });
+</script>
+<?php } ?>

@@ -8,6 +8,9 @@ class Bedside_nurse extends MX_Controller
     {
         parent::__construct();
         $this->load->model('Bedside_nurse_model');
+        if (!$this->ion_auth->in_group('admin')) {
+            redirect('home/permission');
+        }
     }
 
     // list

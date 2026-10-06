@@ -140,12 +140,24 @@ patient.name as patient_name
         return $this->db->get('nurse_billing_periods')->result();
     }
 
-    // The current (open / latest) billing period for an assignment
+    // The current (latest, not superseded) billing period for an assignment
     function getCurrentBillingPeriod($assignment_id)
     {
         $this->db->where('assignment_id', $assignment_id);
+        $this->db->where('is_superseded', 0);
         $this->db->order_by('effective_from', 'DESC');
         $this->db->order_by('id', 'DESC');
+        $this->db->limit(1);
+        return $this->db->get('nurse_billing_periods')->row();
+    }
+
+    // The first (earliest, not superseded) billing period for an assignment
+    function getFirstBillingPeriod($assignment_id)
+    {
+        $this->db->where('assignment_id', $assignment_id);
+        $this->db->where('is_superseded', 0);
+        $this->db->order_by('effective_from', 'ASC');
+        $this->db->order_by('id', 'ASC');
         $this->db->limit(1);
         return $this->db->get('nurse_billing_periods')->row();
     }
@@ -156,15 +168,79 @@ patient.name as patient_name
         return $this->db->insert_id();
     }
 
-    function closeBillingPeriod($period_id, $effective_to)
+    function updateBillingPeriod($period_id, $data)
     {
         $this->db->where('id', $period_id);
-        $this->db->update('nurse_billing_periods', array('effective_to' => $effective_to));
+        $this->db->update('nurse_billing_periods', $data);
+    }
+
+    function closeBillingPeriod($period_id, $effective_to)
+    {
+        $this->updateBillingPeriod($period_id, array('effective_to' => $effective_to));
+    }
+
+    // Keep a corrected period in history but stop charging it
+    function supersedeBillingPeriod($period_id)
+    {
+        $this->updateBillingPeriod($period_id, array(
+            'is_superseded' => 1,
+            'superseded_at' => date('Y-m-d H:i:s'),
+        ));
     }
 
     function updateAssignmentEndDate($assignment_id, $end_date)
     {
         $this->db->where('id', $assignment_id);
         $this->db->update('nurse_assignments', array('end_date' => $end_date));
+    }
+
+    // Assignments of a nurse with patient name (active only by default)
+    function getNurseAssignments($nurse_id, $only_active = true)
+    {
+        $this->db->select('nurse_assignments.*, patient.name as patient_name');
+        $this->db->from('nurse_assignments');
+        $this->db->join('patient', 'patient.id = nurse_assignments.patient_id', 'left');
+        $this->db->where('nurse_assignments.nurse_id', $nurse_id);
+        if ($only_active) {
+            $this->db->where('nurse_assignments.is_active', 1);
+        }
+        $this->db->order_by('nurse_assignments.start_date', 'ASC');
+        $this->db->order_by('nurse_assignments.id', 'ASC');
+        return $this->db->get()->result();
+    }
+
+    // Other active Primary assignments for the patient overlapping the given dates
+    function getOverlappingPrimary($patient_id, $start_date, $end_date, $exclude_assignment_id = null)
+    {
+        $this->db->select('nurse_assignments.*, nurse.name as nurse_name');
+        $this->db->from('nurse_assignments');
+        $this->db->join('nurse', 'nurse.id = nurse_assignments.nurse_id', 'left');
+        $this->db->where('nurse_assignments.patient_id', $patient_id);
+        $this->db->where('nurse_assignments.is_active', 1);
+        $this->db->where('nurse_assignments.assignment_role', 'Primary');
+        $this->db->where('nurse_assignments.start_date <=', $end_date);
+        $this->db->where('nurse_assignments.end_date >=', $start_date);
+        if (!empty($exclude_assignment_id)) {
+            $this->db->where('nurse_assignments.id !=', $exclude_assignment_id);
+        }
+        return $this->db->get()->result();
+    }
+
+    function getPayments($nurse_id)
+    {
+        $this->db->select('nurse_payments.*, patient.name as patient_name');
+        $this->db->from('nurse_payments');
+        $this->db->join('nurse_assignments', 'nurse_assignments.id = nurse_payments.assignment_id', 'left');
+        $this->db->join('patient', 'patient.id = nurse_assignments.patient_id', 'left');
+        $this->db->where('nurse_payments.nurse_id', $nurse_id);
+        $this->db->order_by('nurse_payments.payment_date', 'ASC');
+        $this->db->order_by('nurse_payments.id', 'ASC');
+        return $this->db->get()->result();
+    }
+
+    function insertPayment($data)
+    {
+        $this->db->insert('nurse_payments', $data);
+        return $this->db->insert_id();
     }
 }

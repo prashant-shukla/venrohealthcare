@@ -1,15 +1,31 @@
+<?php
+$nurse_options = function ($selected) use ($nurses) {
+    $html = '<option value="">-- None --</option>';
+    foreach ($nurses as $n) {
+        $html .= '<option value="' . $n->id . '"' . ($selected == $n->id ? ' selected' : '') . '>' . html_escape($n->name) . '</option>';
+    }
+    return $html;
+};
+$patient_options = function ($selected) use ($patients) {
+    $html = '<option value="">-- None --</option>';
+    foreach ($patients as $p) {
+        $html .= '<option value="' . $p->id . '"' . ($selected == $p->id ? ' selected' : '') . '>' . html_escape($p->name) . '</option>';
+    }
+    return $html;
+};
+?>
 <section id="main-content">
     <section class="wrapper site-min-height">
 
         <?php if ($this->session->flashdata('feedback_msg')) { ?>
-            <div class="alert alert-success"><?php echo $this->session->flashdata('feedback_msg'); ?></div>
+            <div class="alert alert-success"><?php echo html_escape($this->session->flashdata('feedback_msg')); ?></div>
         <?php } ?>
 
         <?php if ($this->session->flashdata('feedback_link')) { ?>
             <div class="alert alert-info">
-                <strong>Feedback request link generated.</strong> Send this link to the customer/patient:<br>
+                <strong>Feedback request link generated.</strong> Send this link to the customer/patient (no login needed):<br>
                 <input type="text" class="form-control" readonly
-                    value="<?php echo $this->session->flashdata('feedback_link'); ?>"
+                    value="<?php echo html_escape($this->session->flashdata('feedback_link')); ?>"
                     onclick="this.select();">
             </div>
         <?php } ?>
@@ -24,6 +40,7 @@
                             For feedback received from a patient/customer and entered by staff.
                         </p>
                         <form method="post" action="<?php echo base_url('feedback/manualAdd'); ?>">
+                            <input type="hidden" name="assignment_id" value="<?php echo html_escape($prefill['assignment_id']); ?>">
                             <div class="form-group">
                                 <label>Feedback Type</label>
                                 <select name="feedback_type" class="form-control" required>
@@ -33,21 +50,11 @@
                             </div>
                             <div class="form-group">
                                 <label>Nurse (for nurse feedback)</label>
-                                <select name="nurse_id" class="form-control">
-                                    <option value="">-- None --</option>
-                                    <?php foreach ($nurses as $n) { ?>
-                                        <option value="<?php echo $n->id; ?>"><?php echo $n->name; ?></option>
-                                    <?php } ?>
-                                </select>
+                                <select name="nurse_id" class="form-control"><?php echo $nurse_options($prefill['nurse_id']); ?></select>
                             </div>
                             <div class="form-group">
                                 <label>Patient / Customer</label>
-                                <select name="patient_id" class="form-control">
-                                    <option value="">-- None --</option>
-                                    <?php foreach ($patients as $p) { ?>
-                                        <option value="<?php echo $p->id; ?>"><?php echo $p->name; ?></option>
-                                    <?php } ?>
-                                </select>
+                                <select name="patient_id" class="form-control"><?php echo $patient_options($prefill['patient_id']); ?></select>
                             </div>
                             <div class="form-group">
                                 <label>Customer Name (if not a listed patient)</label>
@@ -79,9 +86,10 @@
                     <div class="panel-body">
                         <p class="text-muted" style="font-size:12px;">
                             Generate a link to send to the customer/patient. They complete the feedback
-                            externally and it appears here, marked as submitted by the customer.
+                            externally and it appears here and on the patient and nurse records, marked as submitted by the customer.
                         </p>
                         <form method="post" action="<?php echo base_url('feedback/generateLink'); ?>">
+                            <input type="hidden" name="assignment_id" value="<?php echo html_escape($prefill['assignment_id']); ?>">
                             <div class="form-group">
                                 <label>Feedback Type</label>
                                 <select name="feedback_type" class="form-control" required>
@@ -91,21 +99,11 @@
                             </div>
                             <div class="form-group">
                                 <label>Nurse (for nurse feedback)</label>
-                                <select name="nurse_id" class="form-control">
-                                    <option value="">-- None --</option>
-                                    <?php foreach ($nurses as $n) { ?>
-                                        <option value="<?php echo $n->id; ?>"><?php echo $n->name; ?></option>
-                                    <?php } ?>
-                                </select>
+                                <select name="nurse_id" class="form-control"><?php echo $nurse_options($prefill['nurse_id']); ?></select>
                             </div>
                             <div class="form-group">
                                 <label>Patient / Customer</label>
-                                <select name="patient_id" class="form-control">
-                                    <option value="">-- None --</option>
-                                    <?php foreach ($patients as $p) { ?>
-                                        <option value="<?php echo $p->id; ?>"><?php echo $p->name; ?></option>
-                                    <?php } ?>
-                                </select>
+                                <select name="patient_id" class="form-control"><?php echo $patient_options($prefill['patient_id']); ?></select>
                             </div>
                             <button type="submit" class="btn btn-primary">Generate Link</button>
                         </form>
@@ -124,6 +122,7 @@
                             <th>Type</th>
                             <th>Nurse</th>
                             <th>Patient / Customer</th>
+                            <th>Assignment</th>
                             <th>Rating</th>
                             <th>Comments</th>
                             <th>Source</th>
@@ -135,10 +134,11 @@
                         <?php if (!empty($feedback)) { ?>
                             <?php foreach ($feedback as $f) { ?>
                                 <tr>
-                                    <td><?php echo $f->feedback_type; ?></td>
-                                    <td><?php echo $f->nurse_name; ?></td>
+                                    <td><?php echo $f->feedback_type == 'Business' ? 'Business / Service' : 'Nurse'; ?></td>
+                                    <td><?php echo html_escape($f->nurse_name); ?></td>
                                     <td><?php echo !empty($f->patient_name) ? html_escape($f->patient_name) : html_escape($f->customer_name); ?></td>
-                                    <td><?php echo $f->rating ? $f->rating . '/5' : '—'; ?></td>
+                                    <td><?php echo !empty($f->assignment_start) ? date('d M Y', strtotime($f->assignment_start)) . ' – ' . date('d M Y', strtotime($f->assignment_end)) : '—'; ?></td>
+                                    <td><?php echo $f->rating ? (int) $f->rating . '/5' : '—'; ?></td>
                                     <td><?php echo htmlspecialchars((string)$f->comments); ?></td>
                                     <td>
                                         <?php if ($f->source == 'Customer') { ?>
@@ -150,18 +150,20 @@
                                     <td>
                                         <?php if ($f->status == 'Pending') { ?>
                                             <span class="label label-warning">Pending</span>
+                                            <br><input type="text" class="form-control input-sm" style="margin-top:4px;min-width:180px;" readonly
+                                                value="<?php echo html_escape(base_url('feedback/form/' . $f->token)); ?>" onclick="this.select();" title="Feedback link">
                                         <?php } else { ?>
                                             <span class="label label-info">Submitted</span>
                                         <?php } ?>
                                     </td>
                                     <td>
                                         <?php echo !empty($f->submitted_at) ? date('d M Y H:i', strtotime($f->submitted_at)) : date('d M Y H:i', strtotime($f->created_at)); ?>
-                                        <?php echo !empty($f->recorded_by_name) ? '<br><small>by ' . $f->recorded_by_name . '</small>' : ''; ?>
+                                        <?php echo !empty($f->recorded_by_name) ? '<br><small>by ' . html_escape($f->recorded_by_name) . '</small>' : ''; ?>
                                     </td>
                                 </tr>
                             <?php } ?>
                         <?php } else { ?>
-                            <tr><td colspan="8" class="text-center">No feedback yet.</td></tr>
+                            <tr><td colspan="9" class="text-center">No feedback yet.</td></tr>
                         <?php } ?>
                     </tbody>
                 </table>

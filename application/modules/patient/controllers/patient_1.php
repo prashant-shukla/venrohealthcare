@@ -379,21 +379,9 @@ class Patient_1 extends MX_Controller {
         redirect('patient/medicalHistory?id=' . $patient_id);
     }
 
+    // Patients are archived (soft deleted) through patient/delete, which requires admin and a reason
     function delete() {
-        $data = array();
-        $id = $this->input->get('id');
-        $user_data = $this->db->get_where('patient', array('id' => $id))->row();
-        $path = $user_data->img_url;
-
-        if (!empty($path)) {
-            unlink($path);
-        }
-        $ion_user_id = $user_data->ion_user_id;
-        $this->db->where('id', $ion_user_id);
-        $this->db->delete('users');
-        $this->patient_model->delete($id);
-        $this->session->set_flashdata('feedback', 'Deleted');
-        redirect('patient');
+        redirect('home/permission');
     }
 
 }

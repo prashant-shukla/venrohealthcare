@@ -9,6 +9,8 @@
 .as-back { display:inline-flex; align-items:center; gap:6px; color:#64748b; font-size:13px; margin-bottom:14px; }
 .as-back:hover { color:#2c7be5; }
 .as-err { background:#fde8e8; border:1px solid #f5b5b5; color:#c0392b; border-radius:10px; padding:12px 16px; font-size:13px; margin-bottom:18px; display:flex; align-items:center; gap:9px; }
+.as-err.as-ok { background:#e6f6ee; border-color:#b7e4c7; color:#1b7742; }
+.as-err.as-warn { background:#fdf1e3; border-color:#f6d9b8; color:#a85d06; }
 
 /* Hero */
 .as-hero { position:relative; background:linear-gradient(135deg,#2c7be5 0%,#1b5fbe 100%); border-radius:14px; padding:22px 26px; color:#fff;
@@ -53,6 +55,8 @@
 .as-btn { display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; padding:6px 12px; border-radius:7px; border:none; color:#fff; cursor:pointer; margin:0 3px 3px 0; text-decoration:none; }
 .as-btn.bill { background:#2c7be5; } .as-btn.bill:hover { background:#1b5fbe; }
 .as-btn.rem  { background:#ef5350; } .as-btn.rem:hover { background:#d63a37; }
+.as-btn.edit { background:#64748b; } .as-btn.edit:hover { background:#475569; }
+.as-btn.fb   { background:#e8830c; } .as-btn.fb:hover { background:#c96f08; }
 .as-cur { color:#0f9d58; font-weight:700; }
 .as-empty { text-align:center; color:#94a3b8; font-size:13px; padding:26px; }
 </style>
@@ -65,6 +69,12 @@
 
       <?php if ($this->session->flashdata('error')) { ?>
         <div class="as-err"><i class="fa fa-exclamation-circle"></i> <?php echo html_escape($this->session->flashdata('error')); ?></div>
+      <?php } ?>
+      <?php if ($this->session->flashdata('success')) { ?>
+        <div class="as-err as-ok"><i class="fa fa-check-circle"></i> <?php echo html_escape($this->session->flashdata('success')); ?></div>
+      <?php } ?>
+      <?php if ($this->session->flashdata('warning')) { ?>
+        <div class="as-err as-warn"><i class="fa fa-exclamation-triangle"></i> <?php echo html_escape($this->session->flashdata('warning')); ?></div>
       <?php } ?>
 
       <!-- ===== HERO ===== -->
@@ -98,10 +108,7 @@
                     <option value="">Select Patient</option>
                     <?php foreach ($patients as $p) {
                         $color = ''; $flag = '';
-                        $this->db->where('patient_id', $p->id);
-                        $this->db->where('end_date >=', date('Y-m-d'));
-                        $assigned = $this->db->get('nurse_assignments')->num_rows();
-                        if ($assigned > 0) { $color = 'orange'; $flag = '🟡'; }
+                        if (in_array($p->id, $assigned_patient_ids)) { $color = 'orange'; $flag = '🟡'; }
                         elseif ($p->status == 'Discharged' || $p->status == 'Deceased') { $color = 'green'; $flag = '🟢'; }
                         else { $color = 'red'; $flag = '🔴'; }
                     ?>
@@ -220,11 +227,20 @@
                   <th>End</th>
                   <th>Term</th>
                   <th>Fee</th>
+                  <th>Transport</th>
                   <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                <?php foreach ($history as $row) { ?>
+                <?php
+                $unit_label = array('Daily' => '/ day', 'Weekly' => '/ week', 'Monthly' => '/ month', 'Flexible' => 'agreed');
+                foreach ($history as $row) {
+                  $cp = $row->current;
+                  $row_freq = $cp ? $cp->billing_frequency : null;
+                  $row_rate = $cp ? (float) $cp->rate : (float) max($row->per_day_fee, $row->per_week_fee, $row->per_month_fee);
+                  $row_tcharge = $cp ? (float) $cp->transport_charge : (float) $row->transport_charge;
+                  $row_tfreq = $cp ? $cp->transport_frequency : $row->transport_frequency;
+                ?>
                   <tr>
                     <td style="font-weight:600;color:#1e293b;"><?php echo html_escape($row->patient_name); ?></td>
                     <td>
@@ -245,18 +261,20 @@
                     </td>
                     <td><?php echo !empty($row->start_date) ? date('d M Y', strtotime($row->start_date)) : '—'; ?></td>
                     <td><?php echo !empty($row->end_date) ? date('d M Y', strtotime($row->end_date)) : 'Ongoing'; ?></td>
-                    <td><?php echo html_escape($row->payment_term); ?></td>
-                    <td class="as-cur">
-                      <?php
-                      $cur = $this->currency;
-                      if ($row->per_day_fee > 0) { echo $cur . ' ' . number_format($row->per_day_fee, 2); }
-                      elseif ($row->per_week_fee > 0) { echo $cur . ' ' . number_format($row->per_week_fee, 2); }
-                      elseif ($row->per_month_fee > 0) { echo $cur . ' ' . number_format($row->per_month_fee, 2); }
-                      else { echo '—'; }
-                      ?>
+                    <td><?php echo $row_freq ? $row_freq : html_escape($row->payment_term); ?></td>
+                    <td class="as-cur"><?php echo $row_rate > 0 ? $cur . ' ' . number_format($row_rate, 2) : '—'; ?></td>
+                    <td>
+                      <?php if ($row_tcharge > 0) { ?>
+                        <?php echo $cur . ' ' . number_format($row_tcharge, 2); ?>
+                        <small style="color:#94a3b8;"><?php echo isset($unit_label[$row_tfreq]) ? $unit_label[$row_tfreq] : ''; ?></small>
+                      <?php } else { ?>
+                        <span style="color:#94a3b8;">—</span>
+                      <?php } ?>
                     </td>
                     <td>
                       <a href="<?php echo base_url('nurse/billing/' . $row->id); ?>" class="as-btn bill"><i class="fa fa-file-text-o"></i> Billing</a>
+                      <a href="<?php echo base_url('nurse/editAssignment/' . $row->id . '?return=assign'); ?>" class="as-btn edit"><i class="fa fa-edit"></i> Edit</a>
+                      <a href="<?php echo base_url('feedback?nurse_id=' . $row->nurse_id . '&patient_id=' . $row->patient_id . '&assignment_id=' . $row->id); ?>" class="as-btn fb"><i class="fa fa-comments"></i> Feedback</a>
                       <a href="javascript:void(0);" class="as-btn rem" onclick="removeAssignment(<?php echo $row->id; ?>)"><i class="fa fa-trash"></i> Remove</a>
                     </td>
                   </tr>
@@ -277,8 +295,11 @@
     // Soft-remove an assignment: confirm + capture reason (audit trail)
     function removeAssignment(id) {
         if (!confirm('Remove this assignment? The historical record will be preserved.')) { return; }
-        var reason = prompt('Reason for removal (recorded in the audit trail):', '');
-        if (reason === null) { return; }
+        var reason = '';
+        while (reason.trim() === '') {
+            reason = prompt('Reason for removal (required, recorded in the audit trail):', '');
+            if (reason === null) { return; }
+        }
         window.location.href = '<?php echo base_url('nurse/deleteAssignments/'); ?>' + id + '?reason=' + encodeURIComponent(reason);
     }
 </script>
